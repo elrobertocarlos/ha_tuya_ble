@@ -1,18 +1,18 @@
 """The Tuya BLE integration."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from struct import pack, unpack
-from typing import Callable
 
 from homeassistant.components.text import (
     TextEntity,
     TextEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -27,19 +27,13 @@ _LOGGER = logging.getLogger(__name__)
 
 SIGNAL_STRENGTH_DP_ID = -1
 
-TuyaBLETextGetter = (
-    Callable[["TuyaBLEText", TuyaBLEProductInfo], str | None] | None
-)
+TuyaBLETextGetter = Callable[["TuyaBLEText", TuyaBLEProductInfo], str | None] | None
 
 
-TuyaBLETextIsAvailable = (
-    Callable[["TuyaBLEText", TuyaBLEProductInfo], bool] | None
-)
+TuyaBLETextIsAvailable = Callable[["TuyaBLEText", TuyaBLEProductInfo], bool] | None
 
 
-TuyaBLETextSetter = (
-    Callable[["TuyaBLEText", TuyaBLEProductInfo, str], None] | None
-)
+TuyaBLETextSetter = Callable[["TuyaBLEText", TuyaBLEProductInfo, str], None] | None
 
 
 def is_fingerbot_in_program_mode(
@@ -66,14 +60,13 @@ def get_fingerbot_program(
             step_count: int = datapoint.value[3]
             for step in range(step_count):
                 step_pos = 4 + step * 3
-                step_data = datapoint.value[step_pos:step_pos+3]
+                step_data = datapoint.value[step_pos : step_pos + 3]
                 position, delay = unpack(">BH", step_data)
-                if delay > 9999:
-                    delay = 9999
+                delay = min(delay, 9999)
                 result += (
-                    (';' if step > 0 else '') +
-                    str(position) +
-                    (('/' + str(delay)) if delay > 0 else '')
+                    (";" if step > 0 else "")
+                    + str(position)
+                    + (("/" + str(delay)) if delay > 0 else "")
                 )
     return result
 
@@ -87,10 +80,10 @@ def set_fingerbot_program(
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
             new_value = bytearray(datapoint.value[0:3])
-            steps = value.split(';')
+            steps = value.split(";")
             new_value += int.to_bytes(len(steps), 1, "big")
             for step in steps:
-                step_values = step.split('/')
+                step_values = step.split("/")
                 position = int(step_values[0])
                 delay = int(step_values[1]) if len(step_values) > 1 else 0
                 new_value += pack(">BH", position, delay)
@@ -119,12 +112,7 @@ mapping: dict[str, TuyaBLECategoryTextMapping] = {
     "szjqr": TuyaBLECategoryTextMapping(
         products={
             **dict.fromkeys(
-                [
-                    "blliqpsj",
-                    "ndvkgsrm",
-                    "yiihr7zh",
-                    "neq16kgd"
-                ],  # Fingerbot Plus
+                ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"],  # Fingerbot Plus
                 [
                     TuyaBLETextMapping(
                         dp_id=121,
@@ -138,17 +126,14 @@ mapping: dict[str, TuyaBLECategoryTextMapping] = {
                         getter=get_fingerbot_program,
                         setter=set_fingerbot_program,
                     ),
-                ]
+                ],
             ),
         },
     ),
     "kg": TuyaBLECategoryTextMapping(
         products={
             **dict.fromkeys(
-                [
-                    "mknd4lci",
-                    "riecov42"
-                ],  # Fingerbot Plus
+                ["mknd4lci", "riecov42"],  # Fingerbot Plus
                 [
                     TuyaBLETextMapping(
                         dp_id=109,
@@ -162,7 +147,7 @@ mapping: dict[str, TuyaBLECategoryTextMapping] = {
                         getter=get_fingerbot_program,
                         setter=set_fingerbot_program,
                     ),
-                ]
+                ],
             ),
         },
     ),
@@ -177,10 +162,8 @@ def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLETextMapping]:
             return product_mapping
         if category.mapping is not None:
             return category.mapping
-        else:
-            return []
-    else:
         return []
+    return []
 
 
 class TuyaBLEText(TuyaBLEEntity, TextEntity):

@@ -110,8 +110,8 @@
             }
         },
         "sensor": {
-            "alarm_lock": {
-                "name": "Alarm"
+            "light_current": {
+                "name": "Light Level"
             },
             "battery": {
                 "name": "Battery"
@@ -145,11 +145,17 @@
             "humidity": {
                 "name": "Humidity"
             },
-            "low_battery": {
-                "name": "Low Battery"
-            },
             "moisture": {
                 "name": "Moisture"
+            },
+            "signal_strength": {
+                "name": "Signal strength"
+            },
+            "temperature": {
+                "name": "Temperature"
+            },
+            "water_intake": {
+                "name": "Water intake"
             },
             "work_state": {
                 "name": "Work state"
@@ -157,11 +163,17 @@
             "residual_electricity": {
                 "name": "Battery"
             },
-            "signal_strength": {
-                "name": "Signal strength"
+            "alarm_lock": {
+                "name": "Alarm"
             },
-            "temperature": {
-                "name": "Temperature"
+            "wrong_finger": {
+                "name": "Wrong Fingerprint"
+            },
+            "wrong_password": {
+                "name": "Wrong Password"
+            },
+            "low_battery": {
+                "name": "Low Battery"
             },
             "time_left": {
                 "name": "Remaining irrigation time"
@@ -178,14 +190,8 @@
             "use_time_z2": {
                 "name": "Last irrigation time - Zone 2"
             },
-            "water_intake": {
-                "name": "Water intake"
-            },
-            "wrong_finger": {
-                "name": "Wrong Fingerprint"
-            },
-            "wrong_password": {
-                "name": "Wrong Password"
+            "end_default": {
+                "name": "Closed Position"
             }
         },
         "switch": {

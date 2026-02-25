@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog],
 and this project adheres to [Semantic Versioning].
+
+## [Unreleased]
+
+## [0.2.5] - 2026-02-23
+
+### Added
+
+- Added cover platform support for Smart Curtain Robot (product_id: kcy0x4pi)
+- Added manual device credentials entry in config flow
+- Added enhanced error handling for Tuya API login failures
+
+### Changed
+
+- Updated README with comprehensive documentation
+- Improved device support documentation with detailed feature lists
+- Added manual credentials entry documentation
+- Enhanced troubleshooting section
+- Updated codeowner to @elrobertocarlos
+- Updated repository references
+
+### Fixed
+
+- Fixed TypeError in config flow when adding integration manually (async_step_user and async_step_init now properly accept user_input parameter)
+- Fixed KeyError in build_cache when config entries lack required Tuya login credentials (added validation before attempting login)
+
 ## [0.1.0] - 2023-04-22
 
 - Initial release

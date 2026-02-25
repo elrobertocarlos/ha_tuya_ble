@@ -1,9 +1,11 @@
 """The Tuya BLE integration."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Final
 
 from tuya_iot import TuyaCloudOpenAPIEndpoint
-from typing_extensions import Final
 
 DOMAIN: Final = "tuya_ble"
 
@@ -43,6 +45,7 @@ FINGERBOT_MODE_PUSH: Final = "push"
 FINGERBOT_MODE_SWITCH: Final = "switch"
 FINGERBOT_MODE_PROGRAM: Final = "program"
 FINGERBOT_BUTTON_EVENT: Final = "fingerbot_button_pressed"
+
 
 @dataclass
 class Country:

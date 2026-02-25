@@ -1,3 +1,14 @@
+"""
+Constants for Tuya BLE communication.
+
+This module defines constants, UUIDs, and enumerations used for
+Tuya BLE device communication:
+- GATT characteristics and service UUIDs
+- Communication constants (MTU, timeouts, manufacturer data ID)
+- TuyaBLECode: Function codes for sending and receiving data
+- TuyaBLEDataPointType: Data point type definitions
+"""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -17,6 +28,8 @@ RESPONSE_WAIT_TIMEOUT = 60
 
 
 class TuyaBLECode(Enum):
+    """Function codes for sending and receiving data to/from Tuya BLE devices."""
+
     FUN_SENDER_DEVICE_INFO = 0x0000
     FUN_SENDER_PAIR = 0x0001
     FUN_SENDER_DPS = 0x0002
@@ -46,6 +59,8 @@ class TuyaBLECode(Enum):
 
 
 class TuyaBLEDataPointType(Enum):
+    """Data point type definitions for Tuya BLE devices."""
+
     DT_RAW = 0
     DT_BOOL = 1
     DT_VALUE = 2

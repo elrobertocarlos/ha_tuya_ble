@@ -1,14 +1,22 @@
-"""The Tuya BLE integration."""
+"""
+Tuya BLE device integration for Home Assistant.
+
+This module provides classes and utilities for managing Tuya BLE devices,
+including device coordinators, entities, product information, and device
+registry integration.
+"""
+
 from __future__ import annotations
-from dataclasses import dataclass
 
 import logging
-from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
+from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import (
-    DeviceInfo,
     EntityDescription,
     generate_entity_id,
 )
@@ -18,15 +26,6 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
-from home_assistant_bluetooth import BluetoothServiceInfoBleak
-from .tuya_ble import (
-    AbstaractTuyaBLEDeviceManager,
-    TuyaBLEDataPoint,
-    TuyaBLEDevice,
-    TuyaBLEDeviceCredentials,
-)
-
-from .cloud import HASSTuyaBLEDeviceManager
 from .const import (
     DEVICE_DEF_MANUFACTURER,
     DOMAIN,
@@ -34,11 +33,46 @@ from .const import (
     SET_DISCONNECTED_DELAY,
 )
 
+if TYPE_CHECKING:
+    from home_assistant_bluetooth import BluetoothServiceInfoBleak
+
+    from .cloud import HASSTuyaBLEDeviceManager
+    from .tuya_ble import (
+        AbstaractTuyaBLEDeviceManager,
+        TuyaBLEDataPoint,
+        TuyaBLEDevice,
+        TuyaBLEDeviceCredentials,
+    )
+
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class TuyaBLEFingerbotInfo:
+    """
+    Fingerbot device configuration information.
+
+    Attributes
+    ----------
+    switch : int
+        The switch data point ID.
+    mode : int
+        The mode data point ID.
+    up_position : int
+        The up position data point ID.
+    down_position : int
+        The down position data point ID.
+    hold_time : int
+        The hold time data point ID.
+    reverse_positions : int
+        The reverse positions data point ID.
+    manual_control : int
+        The manual control data point ID. Defaults to 0.
+    program : int
+        The program data point ID. Defaults to 0.
+
+    """
+
     switch: int
     mode: int
     up_position: int
@@ -51,13 +85,32 @@ class TuyaBLEFingerbotInfo:
 
 @dataclass
 class TuyaBLEProductInfo:
+    """
+    Product information for a Tuya BLE device.
+
+    Attributes
+    ----------
+    name : str
+        The product name.
+    manufacturer : str
+        The manufacturer name. Defaults to DEVICE_DEF_MANUFACTURER.
+    fingerbot : TuyaBLEFingerbotInfo | None
+        Fingerbot-specific configuration, if applicable. Defaults to None.
+
+    """
+
     name: str
     manufacturer: str = DEVICE_DEF_MANUFACTURER
     fingerbot: TuyaBLEFingerbotInfo | None = None
 
 
 class TuyaBLEEntity(CoordinatorEntity):
-    """Tuya BLE base entity."""
+    """
+    Tuya BLE base entity.
+
+    Provides common functionality for all Tuya BLE entities, including device info,
+    availability status, and coordinator update handling.
+    """
 
     def __init__(
         self,
@@ -76,11 +129,15 @@ class TuyaBLEEntity(CoordinatorEntity):
             self._attr_translation_key = description.key
         self.entity_description = description
         self._attr_has_entity_name = True
-        self._attr_device_info = get_device_info(self._device)
         self._attr_unique_id = f"{self._device.device_id}-{description.key}"
         self.entity_id = generate_entity_id(
             "sensor.{}", self._attr_unique_id, hass=hass
         )
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return device info."""
+        return get_device_info(self._device)
 
     @property
     def available(self) -> bool:
@@ -94,9 +151,16 @@ class TuyaBLEEntity(CoordinatorEntity):
 
 
 class TuyaBLECoordinator(DataUpdateCoordinator[None]):
-    """Data coordinator for receiving Tuya BLE updates."""
+    """
+    Data coordinator for receiving Tuya BLE updates.
 
-    def __init__(self, hass: HomeAssistant, device: TuyaBLEDevice) -> None:
+    Manages device connection state, firmware updates, and data updates for Tuya BLE
+    devices.
+    """
+
+    def __init__(
+        self, hass: HomeAssistant, device: TuyaBLEDevice, entry_id: str
+    ) -> None:
         """Initialise the coordinator."""
         super().__init__(
             hass,
@@ -104,14 +168,18 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             name=DOMAIN,
         )
         self._device = device
+        self._entry_id = entry_id
         self._disconnected: bool = True
         self._unsub_disconnect: CALLBACK_TYPE | None = None
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
 
+        # ...existing code...
+
     @property
     def connected(self) -> bool:
+        """Return True when the device is connected."""
         return not self._disconnected
 
     @callback
@@ -120,6 +188,27 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             self._unsub_disconnect()
         if self._disconnected:
             self._disconnected = False
+            # Update device registry with current device info
+            # (including firmware version)
+            device_registry = dr.async_get(self.hass)
+            device_info = get_device_info(self._device)
+            if device_info:
+                _LOGGER.debug(
+                    "%s: Updating device registry with sw_version: %s",
+                    self._device.address,
+                    device_info.get("sw_version"),
+                )
+                # Get existing device entry
+                identifiers = device_info.get("identifiers")
+                if identifiers:
+                    device = device_registry.async_get_device(identifiers=identifiers)
+                    if device:
+                        # Update existing device with new firmware version
+                        device_registry.async_update_device(
+                            device.id,
+                            sw_version=device_info.get("sw_version"),
+                            hw_version=device_info.get("hw_version"),
+                        )
             self.async_update_listeners()
 
     @callback
@@ -158,7 +247,23 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
 
 @dataclass
 class TuyaBLEData:
-    """Data for the Tuya BLE integration."""
+    """
+    Data for the Tuya BLE integration.
+
+    Attributes
+    ----------
+    title : str
+        The display title for the device.
+    device : TuyaBLEDevice
+        The Tuya BLE device instance.
+    product : TuyaBLEProductInfo
+        Product information for the device.
+    manager : HASSTuyaBLEDeviceManager
+        The device manager instance.
+    coordinator : TuyaBLECoordinator
+        The data coordinator for the device.
+
+    """
 
     title: str
     device: TuyaBLEDevice
@@ -169,11 +274,30 @@ class TuyaBLEData:
 
 @dataclass
 class TuyaBLECategoryInfo:
+    """
+    Category information for Tuya BLE devices.
+
+    Attributes
+    ----------
+    products : dict[str, TuyaBLEProductInfo]
+        Mapping of product IDs to product information.
+    info : TuyaBLEProductInfo | None
+        Default product information for the category. Defaults to None.
+
+    """
+
     products: dict[str, TuyaBLEProductInfo]
     info: TuyaBLEProductInfo | None = None
 
 
 devices_database: dict[str, TuyaBLECategoryInfo] = {
+    "cl": TuyaBLECategoryInfo(
+        products={
+            "kcy0x4pi": TuyaBLEProductInfo(  # Smart curtain robot 4
+                name="Smart Curtain Robot",
+            ),
+        },
+    ),
     "co2bj": TuyaBLECategoryInfo(
         products={
             "59s19z5m": TuyaBLEProductInfo(  # device product_id
@@ -184,11 +308,8 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     "ms": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-                [
-                    "ludzroix",
-                    "isk2p555"
-                ],
-                    TuyaBLEProductInfo(  # device product_id
+                ["ludzroix", "isk2p555"],
+                TuyaBLEProductInfo(  # device product_id
                     name="Smart Lock",
                 ),
             ),
@@ -226,12 +347,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                 ),
             ),
             **dict.fromkeys(
-                [
-                    "blliqpsj",
-                    "ndvkgsrm",
-                    "yiihr7zh",
-                    "neq16kgd"
-                ],  # device product_ids
+                ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"],  # device product_ids
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -274,10 +390,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     "kg": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-                [
-                    "mknd4lci",
-                    "riecov42"
-                ],  # device product_ids
+                ["mknd4lci", "riecov42"],  # device product_ids
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -297,12 +410,12 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     "wk": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-            [
-            "drlajpqc",
-            "nhj2j7su",
-            ],  # device product_id
-            TuyaBLEProductInfo(
-                name="Thermostatic Radiator Valve",
+                [
+                    "drlajpqc",
+                    "nhj2j7su",
+                ],  # device product_id
+                TuyaBLEProductInfo(
+                    name="Thermostatic Radiator Valve",
                 ),
             ),
         },
@@ -333,11 +446,11 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
         products={
             **dict.fromkeys(
                 [
-                "6pahkcau",
-                "hfgdqhho",
-                "fnlw6npo",
+                    "6pahkcau",
+                    "hfgdqhho",
+                    "fnlw6npo",
                 ],  # device product_id
-                TuyaBLEProductInfo( 
+                TuyaBLEProductInfo(
                     name="Irrigation computer",
                 ),
             ),
@@ -349,21 +462,64 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
 def get_product_info_by_ids(
     category: str, product_id: str
 ) -> TuyaBLEProductInfo | None:
+    """
+    Get product information by category and product ID.
+
+    Parameters
+    ----------
+    category : str
+        The device category.
+    product_id : str
+        The product ID.
+
+    Returns
+    -------
+    TuyaBLEProductInfo | None
+        Product information if found, otherwise category default info or None.
+
+    """
     category_info = devices_database.get(category)
     if category_info is not None:
         product_info = category_info.products.get(product_id)
         if product_info is not None:
             return product_info
         return category_info.info
-    else:
-        return None
+    return None
 
 
 def get_device_product_info(device: TuyaBLEDevice) -> TuyaBLEProductInfo | None:
+    """
+    Get product information for a Tuya BLE device.
+
+    Parameters
+    ----------
+    device : TuyaBLEDevice
+        The Tuya BLE device.
+
+    Returns
+    -------
+    TuyaBLEProductInfo | None
+        Product information if found, otherwise None.
+
+    """
     return get_product_info_by_ids(device.category, device.product_id)
 
 
 def get_short_address(address: str) -> str:
+    """
+    Get the last 6 characters of a formatted Bluetooth address.
+
+    Parameters
+    ----------
+    address : str
+        The Bluetooth address string.
+
+    Returns
+    -------
+    str
+        The last 6 characters of the formatted address.
+
+    """
     results = address.replace("-", ":").upper().split(":")
     return f"{results[-3]}{results[-2]}{results[-1]}"[-6:]
 
@@ -372,6 +528,22 @@ async def get_device_readable_name(
     discovery_info: BluetoothServiceInfoBleak,
     manager: AbstaractTuyaBLEDeviceManager | None,
 ) -> str:
+    """
+    Build a readable device name for discovered Tuya BLE devices.
+
+    Parameters
+    ----------
+    discovery_info : BluetoothServiceInfoBleak
+        The BLE discovery information for the device.
+    manager : AbstaractTuyaBLEDeviceManager | None
+        Manager used to resolve credentials and product details.
+
+    Returns
+    -------
+    str
+        A user-friendly device name including a short address suffix.
+
+    """
     credentials: TuyaBLEDeviceCredentials | None = None
     product_info: TuyaBLEProductInfo | None = None
     if manager:
@@ -383,42 +555,41 @@ async def get_device_readable_name(
             )
     short_address = get_short_address(discovery_info.address)
     if product_info:
-        return "%s %s" % (product_info.name, short_address)
+        return f"{product_info.name} {short_address}"
     if credentials:
-        return "%s %s" % (credentials.device_name, short_address)
-    return "%s %s" % (discovery_info.device.name, short_address)
+        return f"{credentials.device_name} {short_address}"
+    return f"{discovery_info.device.name} {short_address}"
 
 
 def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
+    """
+    Get device information for Home Assistant device registry.
+
+    Parameters
+    ----------
+    device : TuyaBLEDevice
+        The Tuya BLE device.
+
+    Returns
+    -------
+    DeviceInfo | None
+        Device information including connections, identifiers, manufacturer, model, and
+        version info.
+
+    """
     product_info = None
     if device.category and device.product_id:
         product_info = get_product_info_by_ids(device.category, device.product_id)
     product_name: str
-    if product_info:
-        product_name = product_info.name
-    else:
-        product_name = device.name
-    result = DeviceInfo(
+    product_name = product_info.name if product_info else device.name
+    return DeviceInfo(
         connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         hw_version=device.hardware_version,
         identifiers={(DOMAIN, device.address)},
         manufacturer=(
             product_info.manufacturer if product_info else DEVICE_DEF_MANUFACTURER
         ),
-        model=("%s (%s)")
-        % (
-            device.product_model or product_name,
-            device.product_id,
-        ),
-        name=("%s %s")
-        % (
-            product_name,
-            get_short_address(device.address),
-        ),
-        sw_version=("%s (protocol %s)")
-        % (
-            device.device_version,
-            device.protocol_version,
-        ),
+        model=(f"{device.product_model or product_name} ({device.product_id})"),
+        name=(f"{product_name} {get_short_address(device.address)}"),
+        sw_version=(f"{device.device_version} (protocol {device.protocol_version})"),
     )
-    return result
