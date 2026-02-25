@@ -3,5 +3,5 @@
     "homeassistant": "2025.3.4",
     "hacs": "2.0.5",
     "content_in_root": false,
-    "render_readme": true,
+    "render_readme": true
 }
