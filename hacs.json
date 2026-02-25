@@ -4,7 +4,4 @@
     "hacs": "2.0.5",
     "content_in_root": false,
     "render_readme": true,
-    "issue_tracker": "https://github.com/elrobertocarlos/ha_tuya_ble/issues",
-    "repository": "https://github.com/elrobertocarlos/ha_tuya_ble",
-    "owner": "elrobertocarlos"
 }

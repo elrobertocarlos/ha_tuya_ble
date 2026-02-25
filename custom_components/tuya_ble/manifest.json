@@ -10,6 +10,7 @@
     "tuya"
   ],
   "documentation": "https://github.com/elrobertocarlos/ha_tuya_ble",
+  "issue_tracker": "https://github.com/elrobertocarlos/ha_tuya_ble/issues",
   "iot_class": "local_push",
   "requirements": [
     "tuya-iot-py-sdk==0.6.6",
