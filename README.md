@@ -14,7 +14,7 @@ Place the `custom_components` folder in your configuration directory (or add its
 
 ## Requirements
 
-- Home Assistant 2024.1.0 or newer
+- Home Assistant 2025.3.4 or newer
 - HACS (if installing via HACS)
 
 ## Usage
@@ -53,19 +53,19 @@ Required manual credentials:
 
 ### Fingerbots (category_id 'szjqr' and 'kg')
 
-- **Fingerbot** (product_ids: `ltak7e1p`, `y6kttvd6`, `yrnk7mnn`, `nvr2rocq`, `bnt7wajf`, `rvdceqjh`, `5xhbk964`)  
+- **Fingerbot** (product_ids: `ltak7e1p`, `y6kttvd6`, `yrnk7mnn`, `nvr2rocq`, `bnt7wajf`, `rvdceqjh`, `5xhbk964`)
   Original device, powered by CR2 battery
-  
-- **Adaprox Fingerbot** (product_id: `y6kttvd6`)  
+
+- **Adaprox Fingerbot** (product_id: `y6kttvd6`)
   Built-in battery with USB Type-C charging
-  
-- **Fingerbot Plus** (product_ids: `blliqpsj`, `ndvkgsrm`, `yiihr7zh`, `neq16kgd`, `mknd4lci`, `riecov42`)  
+
+- **Fingerbot Plus** (product_ids: `blliqpsj`, `ndvkgsrm`, `yiihr7zh`, `neq16kgd`, `mknd4lci`, `riecov42`)
   Similar to original, includes sensor button for manual control
-  
-- **CubeTouch 1s** (product_id: `3yqdo5yt`)  
+
+- **CubeTouch 1s** (product_id: `3yqdo5yt`)
   Built-in battery with USB Type-C charging
-  
-- **CubeTouch II** (product_id: `xhf790if`)  
+
+- **CubeTouch II** (product_id: `xhf790if`)
   Built-in battery with USB Type-C charging
 
 **Features:**
@@ -166,7 +166,10 @@ logger:
 - Verify the device is broadcasting BLE advertisements
 - Check that the device is not already paired with another integration
 
+
 ## Support project
+
+**Note:** This fork is maintained by @elrobertocarlos. I am not the original developer from Ukraine. The original developer (@PlusPlus-ua) created this integration and the support section below refers to their work and situation. Please direct support accordingly.
 
 I am working on this integration in Ukraine. Our country was subjected to brutal aggression by Russia. The war still continues. The capital of Ukraine - Kyiv, where I live, and many other cities and villages are constantly under threat of rocket attacks. Our air defense forces are doing wonders, but they also need support. So if you want to help the development of this integration, donate some money and I will spend it to support our air defense.
 
