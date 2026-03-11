@@ -6,22 +6,27 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from struct import pack, unpack
+from typing import TYPE_CHECKING
 
 from homeassistant.components.text import (
     TextEntity,
     TextEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.const import EntityCategory
 
-from .const import (
-    DOMAIN,
+from .const import DOMAIN
+from .devices import (
+    TuyaBLEData,
+    TuyaBLEEntity,
+    TuyaBLEPassiveCoordinator,
+    TuyaBLEProductInfo,
 )
-from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,15 +41,29 @@ TuyaBLETextIsAvailable = Callable[["TuyaBLEText", TuyaBLEProductInfo], bool] | N
 TuyaBLETextSetter = Callable[["TuyaBLEText", TuyaBLEProductInfo, str], None] | None
 
 
+FINGERBOT_PROGRAM_MODE = 2
+
+
 def is_fingerbot_in_program_mode(
     self: TuyaBLEText,
     product: TuyaBLEProductInfo,
 ) -> bool:
+    """
+    Determine if the Fingerbot device is in program mode.
+
+    Args:
+        self: The TuyaBLEText instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        True if the Fingerbot is in program mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
         if datapoint:
-            result = datapoint.value == 2
+            result = datapoint.value == FINGERBOT_PROGRAM_MODE
     return result
 
 
@@ -52,11 +71,22 @@ def get_fingerbot_program(
     self: TuyaBLEText,
     product: TuyaBLEProductInfo,
 ) -> str | None:
-    result: float | None = None
+    """
+    Retrieve the Fingerbot program steps as a formatted string.
+
+    Args:
+        self: The TuyaBLEText instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        A string representing the program steps, formatted as "position/delay;...",
+        or None if unavailable.
+
+    """
+    result: str = ""
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
-            result = ""
             step_count: int = datapoint.value[3]
             for step in range(step_count):
                 step_pos = 4 + step * 3
@@ -68,7 +98,7 @@ def get_fingerbot_program(
                     + str(position)
                     + (("/" + str(delay)) if delay > 0 else "")
                 )
-    return result
+    return result or None
 
 
 def set_fingerbot_program(
@@ -76,6 +106,19 @@ def set_fingerbot_program(
     product: TuyaBLEProductInfo,
     value: str,
 ) -> None:
+    """
+    Set the Fingerbot program steps based on the provided value string.
+
+    Args:
+        self: The TuyaBLEText instance.
+        product: The TuyaBLEProductInfo for the device.
+        value: A string representing the program steps, formatted
+            as "position/delay;...".
+
+    This function parses the value string, constructs the appropriate byte array,
+    and schedules an update to the device's datapoint.
+
+    """
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
@@ -92,28 +135,52 @@ def set_fingerbot_program(
 
 @dataclass
 class TuyaBLETextMapping:
+    """
+    Mapping configuration for a Tuya BLE text entity.
+
+    Attributes:
+        dp_id: The datapoint ID associated with this text entity.
+        description: The entity description for Home Assistant.
+        force_add: Whether to always add this entity.
+        dp_type: The type of the datapoint.
+        default_value: The default value for the text entity.
+        is_available: Callable to determine if the entity is available.
+        getter: Callable to get the value of the entity.
+        setter: Callable to set the value of the entity.
+
+    """
+
     dp_id: int
     description: TextEntityDescription
     force_add: bool = True
     dp_type: TuyaBLEDataPointType | None = None
     default_value: str | None = None
     is_available: TuyaBLETextIsAvailable = None
-    getter: Callable[[TuyaBLEText], None] | None = None
-    setter: Callable[[TuyaBLEText], None] | None = None
+    getter: TuyaBLETextGetter = None
+    setter: TuyaBLETextSetter = None
 
 
 @dataclass
 class TuyaBLECategoryTextMapping:
+    """
+    Represents a mapping of Tuya BLE text entities for a specific category.
+
+    Attributes:
+        products: Optional dictionary mapping product IDs to lists
+            of TuyaBLETextMapping.
+        mapping: Optional list of TuyaBLETextMapping for the category.
+
+    """
+
     products: dict[str, list[TuyaBLETextMapping]] | None = None
     mapping: list[TuyaBLETextMapping] | None = None
 
 
 mapping: dict[str, TuyaBLECategoryTextMapping] = {
-    "szjqr": TuyaBLECategoryTextMapping(
+    "szjqr": TuyaBLECategoryTextMapping(  # Fingerbot Plus
         products={
-            **dict.fromkeys(
-                ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"],  # Fingerbot Plus
-                [
+            **{
+                k: [
                     TuyaBLETextMapping(
                         dp_id=121,
                         description=TextEntityDescription(
@@ -126,15 +193,15 @@ mapping: dict[str, TuyaBLECategoryTextMapping] = {
                         getter=get_fingerbot_program,
                         setter=set_fingerbot_program,
                     ),
-                ],
-            ),
+                ]
+                for k in ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"]
+            },
         },
     ),
-    "kg": TuyaBLECategoryTextMapping(
+    "kg": TuyaBLECategoryTextMapping(  # Fingerbot Plus
         products={
-            **dict.fromkeys(
-                ["mknd4lci", "riecov42"],  # Fingerbot Plus
-                [
+            **{
+                k: [
                     TuyaBLETextMapping(
                         dp_id=109,
                         description=TextEntityDescription(
@@ -147,14 +214,25 @@ mapping: dict[str, TuyaBLECategoryTextMapping] = {
                         getter=get_fingerbot_program,
                         setter=set_fingerbot_program,
                     ),
-                ],
-            ),
+                ]
+                for k in ["mknd4lci", "riecov42"]
+            },
         },
     ),
 }
 
 
 def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLETextMapping]:
+    """
+    Retrieve the list of TuyaBLETextMapping objects for a given TuyaBLEDevice.
+
+    Args:
+        device: The TuyaBLEDevice instance to look up mappings for.
+
+    Returns:
+        A list of TuyaBLETextMapping objects associated with the device.
+
+    """
     category = mapping.get(device.category)
     if category is not None and category.products is not None:
         product_mapping = category.products.get(device.product_id)
@@ -167,16 +245,27 @@ def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLETextMapping]:
 
 
 class TuyaBLEText(TuyaBLEEntity, TextEntity):
-    """Representation of a Tuya BLE text entity."""
+    """Text entity for Tuya BLE devices."""
 
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: DataUpdateCoordinator,
+        coordinator: TuyaBLEPassiveCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         mapping: TuyaBLETextMapping,
     ) -> None:
+        """
+        Initialize a TuyaBLEText entity.
+
+        Args:
+            hass: HomeAssistant instance.
+            coordinator: Coordinator for passive updates.
+            device: The Tuya BLE device.
+            product: Product information for the device.
+            mapping: Mapping configuration for the text entity.
+
+        """
         super().__init__(hass, coordinator, device, product, mapping.description)
         self._mapping = mapping
 
@@ -191,14 +280,14 @@ class TuyaBLEText(TuyaBLEEntity, TextEntity):
     @property
     def native_value(self) -> str | None:
         """Return the value reported by the text."""
-        if self._mapping.getter:
+        if self._mapping.getter is not None:
             return self._mapping.getter(self, self._product)
 
         datapoint = self._device.datapoints[self._mapping.dp_id]
         if datapoint:
             return str(datapoint.value)
 
-        return self._mapping.description.default_value
+        return self._mapping.default_value
 
     def set_value(self, value: str) -> None:
         """Change the value."""
@@ -222,18 +311,16 @@ async def async_setup_entry(
     """Set up the Tuya BLE sensors."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     mappings = get_mapping_by_device(data.device)
-    entities: list[TuyaBLEText] = []
-    for mapping in mappings:
-        if mapping.force_add or data.device.datapoints.has_id(
-            mapping.dp_id, mapping.dp_type
-        ):
-            entities.append(
-                TuyaBLEText(
-                    hass,
-                    data.coordinator,
-                    data.device,
-                    data.product,
-                    mapping,
-                )
-            )
+    entities: list[TuyaBLEText] = [
+        TuyaBLEText(
+            hass,
+            data.coordinator,
+            data.device,
+            data.product,
+            mapping,
+        )
+        for mapping in mappings
+        if mapping.force_add
+        or data.device.datapoints.has_id(mapping.dp_id, mapping.dp_type)
+    ]
     async_add_entities(entities)

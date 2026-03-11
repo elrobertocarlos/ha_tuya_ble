@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS
 from bleak_retry_connector import get_device
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .cloud import HASSTuyaBLEDeviceManager
 from .const import DOMAIN
-from .devices import TuyaBLECoordinator, TuyaBLEData, get_device_product_info
+from .devices import (
+    TuyaBLEData,
+    TuyaBLEPassiveCoordinator,
+    get_device_product_info,
+)
 from .tuya_ble import TuyaBLEDevice
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
 
 PLATFORMS: list[Platform] = [
     Platform.COVER,
@@ -34,21 +40,30 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Tuya BLE from a config entry."""
+    """
+    Set up a Tuya BLE device from a config entry.
+
+    Initializes the device, coordinator, and forwards setup to supported platforms.
+    """
     address: str = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(
-        hass, address.upper(), True
+        hass, address.upper(), connectable=True
     ) or await get_device(address)
     if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Tuya BLE device with address {address}"
-        )
+        msg = f"Could not find Tuya BLE device with address {address}"
+        raise ConfigEntryNotReady(msg)
     manager = HASSTuyaBLEDeviceManager(hass, entry.options.copy())
     device = TuyaBLEDevice(manager, ble_device)
     await device.initialize()
     product_info = get_device_product_info(device)
+    if product_info is None:
+        msg = (
+            f"Could not determine product info for Tuya BLE device with address "
+            f"{address}"
+        )
+        raise ConfigEntryNotReady(msg)
 
-    coordinator = TuyaBLECoordinator(hass, device, entry.entry_id)
+    coordinator = TuyaBLEPassiveCoordinator(hass, _LOGGER, address, device)
 
     """
     try:
@@ -63,7 +78,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     @callback
     def _async_update_ble(
         service_info: bluetooth.BluetoothServiceInfoBleak,
-        change: bluetooth.BluetoothChange,
+        change: bluetooth.BluetoothChange,  # noqa: ARG001
     ) -> None:
         """Update from a ble callback."""
         device.set_ble_device_and_advertisement_data(
@@ -90,7 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    async def _async_stop(event: Event) -> None:
+    async def _async_stop(event: Event) -> None:  # noqa: ARG001
         """Close the connection."""
         await device.stop()
 

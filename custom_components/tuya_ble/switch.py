@@ -5,20 +5,26 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import (
     SwitchEntity,
     SwitchEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.const import EntityCategory
 
 from .const import DOMAIN
-from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
+from .devices import (
+    TuyaBLEData,
+    TuyaBLEEntity,
+    TuyaBLEPassiveCoordinator,
+    TuyaBLEProductInfo,
+)
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +43,21 @@ TuyaBLESwitchSetter = Callable[["TuyaBLESwitch", TuyaBLEProductInfo, bool], None
 
 @dataclass
 class TuyaBLESwitchMapping:
+    """
+    Mapping for a Tuya BLE switch.
+
+    Attributes:
+        dp_id: The datapoint ID for the switch.
+        description: The entity description for the switch.
+        force_add: Whether to always add the switch entity.
+        dp_type: The type of datapoint.
+        bitmap_mask: Optional bitmap mask for the datapoint.
+        is_available: Callable to determine if the switch is available.
+        getter: Callable to get the switch state.
+        setter: Callable to set the switch state.
+
+    """
+
     dp_id: int
     description: SwitchEntityDescription
     force_add: bool = True
@@ -47,20 +68,45 @@ class TuyaBLESwitchMapping:
     setter: TuyaBLESwitchSetter = None
 
 
+FINGERBOT_MODE_PROGRAM = 2
+
+
 def is_fingerbot_in_program_mode(
     self: TuyaBLESwitch, product: TuyaBLEProductInfo
 ) -> bool:
+    """
+    Determine if the Fingerbot is in program mode.
+
+    Args:
+        self (TuyaBLESwitch): The switch entity instance.
+        product (TuyaBLEProductInfo): The product information.
+
+    Returns:
+        bool: True if the Fingerbot is in program mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
         if datapoint:
-            result = datapoint.value == 2
+            result = datapoint.value == FINGERBOT_MODE_PROGRAM
     return result
 
 
 def is_fingerbot_in_switch_mode(
     self: TuyaBLESwitch, product: TuyaBLEProductInfo
 ) -> bool:
+    """
+    Determine if the Fingerbot is in switch mode.
+
+    Args:
+        self (TuyaBLESwitch): The switch entity instance.
+        product (TuyaBLEProductInfo): The product information.
+
+    Returns:
+        bool: True if the Fingerbot is in switch mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
@@ -69,32 +115,64 @@ def is_fingerbot_in_switch_mode(
     return result
 
 
+FINGERBOT_REPEAT_FOREVER = 0xFFFF
+
+
 def get_fingerbot_program_repeat_forever(
     self: TuyaBLESwitch, product: TuyaBLEProductInfo
 ) -> bool | None:
+    """
+    Determine if the Fingerbot program is set to repeat forever.
+
+    Args:
+        self (TuyaBLESwitch): The switch entity instance.
+        product (TuyaBLEProductInfo): The product information.
+
+    Returns:
+        bool | None: True if repeat forever is set, False if not,
+            or None if unavailable.
+
+    """
     result: bool | None = None
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
             repeat_count = int.from_bytes(datapoint.value[0:2], "big")
-            result = repeat_count == 0xFFFF
+            result = repeat_count == FINGERBOT_REPEAT_FOREVER
     return result
 
 
 def set_fingerbot_program_repeat_forever(
-    self: TuyaBLESwitch, product: TuyaBLEProductInfo, value: bool
+    self: TuyaBLESwitch,
+    product: TuyaBLEProductInfo,
+    value: bool,  # noqa: FBT001
 ) -> None:
+    """
+    Set the Fingerbot program to repeat forever or not.
+
+    Args:
+        self (TuyaBLESwitch): The switch entity instance.
+        product (TuyaBLEProductInfo): The product information.
+        value (bool): True to set repeat forever, False otherwise.
+
+    Returns:
+        None
+
+    """
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
             new_value = (
-                int.to_bytes(0xFFFF if value else 1, 2, "big") + datapoint.value[2:]
+                int.to_bytes(FINGERBOT_REPEAT_FOREVER if value else 1, 2, "big")
+                + datapoint.value[2:]
             )
             self._hass.create_task(datapoint.set_value(new_value))
 
 
 @dataclass
 class TuyaBLEFingerbotSwitchMapping(TuyaBLESwitchMapping):
+    """Switch mapping for Tuya BLE Fingerbot devices."""
+
     description: SwitchEntityDescription = field(
         default_factory=lambda: SwitchEntityDescription(
             key="switch",
@@ -105,6 +183,8 @@ class TuyaBLEFingerbotSwitchMapping(TuyaBLESwitchMapping):
 
 @dataclass
 class TuyaBLEReversePositionsMapping(TuyaBLESwitchMapping):
+    """Switch mapping for reverse positions on Tuya BLE Fingerbot devices."""
+
     description: SwitchEntityDescription = field(
         default_factory=lambda: SwitchEntityDescription(
             key="reverse_positions",
@@ -117,6 +197,15 @@ class TuyaBLEReversePositionsMapping(TuyaBLESwitchMapping):
 
 @dataclass
 class TuyaBLECategorySwitchMapping:
+    """
+    Category switch mapping for Tuya BLE devices.
+
+    Attributes:
+        products: Optional dictionary mapping product IDs to lists of switch mappings.
+        mapping: Optional list of switch mappings for the category.
+
+    """
+
     products: dict[str, list[TuyaBLESwitchMapping]] | None = None
     mapping: list[TuyaBLESwitchMapping] | None = None
 
@@ -158,31 +247,30 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
     ),
     "ms": TuyaBLECategorySwitchMapping(
         products={
-            **dict.fromkeys(
-                ["ludzroix", "isk2p555"],  # Smart Lock
-                [
+            **{
+                k: [
                     TuyaBLESwitchMapping(
                         dp_id=47,
                         description=SwitchEntityDescription(
                             key="lock_motor_state",
                         ),
                     ),
-                ],
-            ),
+                ]
+                for k in ["ludzroix", "isk2p555"]  # Smart Lock
+            },
         }
     ),
     "szjqr": TuyaBLECategorySwitchMapping(
         products={
-            **dict.fromkeys(
-                ["3yqdo5yt", "xhf790if"],  # CubeTouch 1s and II
-                [
+            **{
+                k: [
                     TuyaBLEFingerbotSwitchMapping(dp_id=1),
                     TuyaBLEReversePositionsMapping(dp_id=4),
-                ],
-            ),
-            **dict.fromkeys(
-                ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"],  # Fingerbot Plus
-                [
+                ]
+                for k in ["3yqdo5yt", "xhf790if"]
+            },  # CubeTouch 1s and II
+            **{
+                k: [
                     TuyaBLEFingerbotSwitchMapping(dp_id=2),
                     TuyaBLEReversePositionsMapping(dp_id=11),
                     TuyaBLESwitchMapping(
@@ -212,10 +300,15 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
                         is_available=is_fingerbot_in_program_mode,
                         setter=set_fingerbot_program_repeat_forever,
                     ),
-                ],
-            ),
-            **dict.fromkeys(
-                [
+                ]
+                for k in ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"]
+            },
+            **{
+                k: [
+                    TuyaBLEFingerbotSwitchMapping(dp_id=2),
+                    TuyaBLEReversePositionsMapping(dp_id=11),
+                ]
+                for k in [
                     "ltak7e1p",
                     "y6kttvd6",
                     "yrnk7mnn",
@@ -223,19 +316,14 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
                     "bnt7wajf",
                     "rvdceqjh",
                     "5xhbk964",
-                ],  # Fingerbot
-                [
-                    TuyaBLEFingerbotSwitchMapping(dp_id=2),
-                    TuyaBLEReversePositionsMapping(dp_id=11),
-                ],
-            ),
+                ]
+            },  # Fingerbot
         },
     ),
     "kg": TuyaBLECategorySwitchMapping(
         products={
-            **dict.fromkeys(
-                ["mknd4lci", "riecov42"],  # Fingerbot Plus
-                [
+            **{
+                k: [
                     TuyaBLEFingerbotSwitchMapping(dp_id=1),
                     TuyaBLEReversePositionsMapping(dp_id=104),
                     TuyaBLESwitchMapping(
@@ -265,18 +353,15 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
                         is_available=is_fingerbot_in_program_mode,
                         setter=set_fingerbot_program_repeat_forever,
                     ),
-                ],
-            ),
+                ]
+                for k in ["mknd4lci", "riecov42"]
+            },
         },
     ),
     "wk": TuyaBLECategorySwitchMapping(
         products={
-            **dict.fromkeys(
-                [
-                    "drlajpqc",
-                    "nhj2j7su",
-                ],  # Thermostatic Radiator Valve
-                [
+            **{
+                k: [
                     TuyaBLESwitchMapping(
                         dp_id=8,
                         description=SwitchEntityDescription(
@@ -325,8 +410,12 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
                             entity_category=EntityCategory.CONFIG,
                         ),
                     ),
-                ],
-            ),
+                ]
+                for k in [
+                    "drlajpqc",
+                    "nhj2j7su",
+                ]
+            },
         },
     ),
     "wsdcg": TuyaBLECategorySwitchMapping(
@@ -413,7 +502,17 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
 }
 
 
-def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLECategorySwitchMapping]:
+def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLESwitchMapping]:
+    """
+    Retrieve the list of switch mappings for a given Tuya BLE device.
+
+    Args:
+        device (TuyaBLEDevice): The Tuya BLE device instance.
+
+    Returns:
+        list[TuyaBLECategorySwitchMapping]: A list of switch mappings for the device.
+
+    """
     category = mapping.get(device.category)
     if category is not None and category.products is not None:
         product_mapping = category.products.get(device.product_id)
@@ -431,19 +530,31 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: DataUpdateCoordinator,
+        coordinator: TuyaBLEPassiveCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         mapping: TuyaBLESwitchMapping,
     ) -> None:
+        """
+        Initialize a Tuya BLE Switch entity.
+
+        Args:
+            hass (HomeAssistant): The Home Assistant instance.
+            coordinator (TuyaBLEPassiveCoordinator): The update coordinator.
+            device (TuyaBLEDevice): The Tuya BLE device.
+            product (TuyaBLEProductInfo): The product information.
+            mapping (TuyaBLESwitchMapping): The switch mapping configuration.
+
+        """
         super().__init__(hass, coordinator, device, product, mapping.description)
         self._mapping = mapping
 
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        if self._mapping.getter:
-            return self._mapping.getter(self, self._product)
+        if self._mapping.getter is not None:
+            result = self._mapping.getter(self, self._product)
+            return bool(result) if result is not None else False
 
         datapoint = self._device.datapoints[self._mapping.dp_id]
         if datapoint:
@@ -452,7 +563,17 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
                 in [TuyaBLEDataPointType.DT_RAW, TuyaBLEDataPointType.DT_BITMAP]
                 and self._mapping.bitmap_mask
             ):
-                bitmap_value = bytes(datapoint.value)
+                value = datapoint.value
+                if isinstance(value, bytes):
+                    bitmap_value = value
+                elif isinstance(value, int):
+                    bitmap_value = value.to_bytes(
+                        (value.bit_length() + 7) // 8 or 1, "big"
+                    )
+                elif isinstance(value, str):
+                    bitmap_value = value.encode()
+                else:
+                    bitmap_value = bytes(value)
                 bitmap_mask = self._mapping.bitmap_mask
                 for v, m in zip(bitmap_value, bitmap_mask, strict=True):
                     if (v & m) != 0:
@@ -461,10 +582,10 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
                 return bool(datapoint.value)
         return False
 
-    def turn_on(self, **kwargs: Any) -> None:
+    def turn_on(self, **kwargs: Any) -> None:  # noqa: ARG002
         """Turn the switch on."""
         if self._mapping.setter:
-            return self._mapping.setter(self, self._product, True)
+            return self._mapping.setter(self, self._product, True)  # noqa: FBT003
 
         new_value: bool | bytes
         if self._mapping.bitmap_mask:
@@ -474,7 +595,15 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
                 self._mapping.bitmap_mask,
             )
             bitmap_mask = self._mapping.bitmap_mask
-            bitmap_value = bytes(datapoint.value)
+            value = datapoint.value
+            if isinstance(value, bytes):
+                bitmap_value = value
+            elif isinstance(value, int):
+                bitmap_value = value.to_bytes((value.bit_length() + 7) // 8 or 1, "big")
+            elif isinstance(value, str):
+                bitmap_value = value.encode()
+            else:
+                bitmap_value = bytes(value)
             new_value = bytes(
                 v | m for (v, m) in zip(bitmap_value, bitmap_mask, strict=True)
             )
@@ -482,16 +611,17 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.dp_id,
                 TuyaBLEDataPointType.DT_BOOL,
-                True,
+                True,  # noqa: FBT003
             )
             new_value = True
         if datapoint:
             self._hass.create_task(datapoint.set_value(new_value))
+        return None
 
-    def turn_off(self, **kwargs: Any) -> None:
+    def turn_off(self, **kwargs: Any) -> None:  # noqa: ARG002
         """Turn the switch off."""
         if self._mapping.setter:
-            return self._mapping.setter(self, self._product, False)
+            return self._mapping.setter(self, self._product, False)  # noqa: FBT003
 
         new_value: bool | bytes
         if self._mapping.bitmap_mask:
@@ -501,7 +631,15 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
                 self._mapping.bitmap_mask,
             )
             bitmap_mask = self._mapping.bitmap_mask
-            bitmap_value = bytes(datapoint.value)
+            value = datapoint.value
+            if isinstance(value, bytes):
+                bitmap_value = value
+            elif isinstance(value, int):
+                bitmap_value = value.to_bytes((value.bit_length() + 7) // 8 or 1, "big")
+            elif isinstance(value, str):
+                bitmap_value = value.encode()
+            else:
+                bitmap_value = bytes(value)
             new_value = bytes(
                 v & ~m for (v, m) in zip(bitmap_value, bitmap_mask, strict=True)
             )
@@ -509,11 +647,12 @@ class TuyaBLESwitch(TuyaBLEEntity, SwitchEntity):
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.dp_id,
                 TuyaBLEDataPointType.DT_BOOL,
-                False,
+                False,  # noqa: FBT003
             )
             new_value = False
         if datapoint:
             self._hass.create_task(datapoint.set_value(new_value))
+        return None
 
     @property
     def available(self) -> bool:
@@ -529,21 +668,30 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Tuya BLE sensors."""
+    """
+    Set up Tuya BLE switch entities from a config entry.
+
+    Args:
+        hass (HomeAssistant): The Home Assistant instance.
+        entry (ConfigEntry): The configuration entry.
+        async_add_entities (AddEntitiesCallback): Callback to add entities.
+
+    Returns:
+        None
+
+    """
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     mappings = get_mapping_by_device(data.device)
-    entities: list[TuyaBLESwitch] = []
-    for mapping in mappings:
-        if mapping.force_add or data.device.datapoints.has_id(
-            mapping.dp_id, mapping.dp_type
-        ):
-            entities.append(
-                TuyaBLESwitch(
-                    hass,
-                    data.coordinator,
-                    data.device,
-                    data.product,
-                    mapping,
-                )
-            )
+    entities: list[TuyaBLESwitch] = [
+        TuyaBLESwitch(
+            hass,
+            data.coordinator,
+            data.device,
+            data.product,
+            mapping,
+        )
+        for mapping in mappings
+        if mapping.force_add
+        or data.device.datapoints.has_id(mapping.dp_id, mapping.dp_type)
+    ]
     async_add_entities(entities)

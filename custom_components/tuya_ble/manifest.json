@@ -13,7 +13,7 @@
   "issue_tracker": "https://github.com/elrobertocarlos/ha_tuya_ble/issues",
   "iot_class": "local_push",
   "requirements": [
-    "tuya-iot-py-sdk==0.6.6",
+    "tuya-iot-py-sdk>=0.6.6",
     "pycountry>23.0.0"
   ],
   "version": "0.2.5",

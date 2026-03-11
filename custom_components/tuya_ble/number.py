@@ -5,28 +5,35 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from homeassistant.components.number import (
     NumberEntity,
     NumberEntityDescription,
 )
 from homeassistant.components.number.const import NumberDeviceClass, NumberMode
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
+    EntityCategory,
     UnitOfTemperature,
     UnitOfTime,
     UnitOfVolume,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN
-from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
+from .devices import (
+    TuyaBLEData,
+    TuyaBLEEntity,
+    TuyaBLEPassiveCoordinator,
+    TuyaBLEProductInfo,
+)
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +52,22 @@ TuyaBLENumberSetter = (
 
 @dataclass
 class TuyaBLENumberMapping:
+    """
+    Mapping configuration for a Tuya BLE Number entity.
+
+    Attributes:
+        dp_id: The datapoint ID associated with this number entity.
+        description: The entity description for Home Assistant.
+        force_add: Whether to force add the entity even if the datapoint is not present.
+        dp_type: The type of datapoint (optional).
+        coefficient: A coefficient to scale the value.
+        is_available: Callable to determine if the entity should be available.
+        getter: Callable to get the value.
+        setter: Callable to set the value.
+        mode: The input mode for the number entity.
+
+    """
+
     dp_id: int
     description: NumberEntityDescription
     force_add: bool = True
@@ -60,23 +83,48 @@ def is_fingerbot_in_program_mode(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> bool:
+    """
+    Determine if the Fingerbot device is in program mode.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        True if the device is in program mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
         if datapoint:
-            result = datapoint.value == 2
+            result = datapoint.value == FINGERBOT_PROGRAM_MODE
     return result
+
+
+FINGERBOT_PROGRAM_MODE = 2
 
 
 def is_fingerbot_not_in_program_mode(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> bool:
+    """
+    Determine if the Fingerbot device is not in program mode.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        True if the device is not in program mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
         if datapoint:
-            result = datapoint.value != 2
+            result = datapoint.value != FINGERBOT_PROGRAM_MODE
     return result
 
 
@@ -84,6 +132,17 @@ def is_fingerbot_in_push_mode(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> bool:
+    """
+    Determine if the Fingerbot device is in push mode.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        True if the device is in push mode, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot:
         datapoint = self._device.datapoints[product.fingerbot.mode]
@@ -92,20 +151,36 @@ def is_fingerbot_in_push_mode(
     return result
 
 
+FINGERBOT_REPEAT_COUNT_INVALID = 0xFFFF
+
+
+FINGERBOT_PROGRAM_MODE_VALUE = 2
+
 def is_fingerbot_repeat_count_available(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> bool:
+    """
+    Determine if the repeat count for a Fingerbot device's program is available.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        True if the repeat count is available and valid, False otherwise.
+
+    """
     result: bool = True
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.mode]
         if datapoint:
-            result = datapoint.value == 2
+            result = datapoint.value == FINGERBOT_PROGRAM_MODE_VALUE
         if result:
             datapoint = self._device.datapoints[product.fingerbot.program]
             if datapoint and type(datapoint.value) is bytes:
                 repeat_count = int.from_bytes(datapoint.value[0:2], "big")
-                result = repeat_count != 0xFFFF
+                result = repeat_count != FINGERBOT_REPEAT_COUNT_INVALID
 
     return result
 
@@ -114,6 +189,17 @@ def get_fingerbot_program_repeat_count(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> float | None:
+    """
+    Retrieve the repeat count for a Fingerbot device's program.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        The repeat count as a float if available, otherwise None.
+
+    """
     result: float | None = None
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
@@ -129,6 +215,18 @@ def set_fingerbot_program_repeat_count(
     product: TuyaBLEProductInfo,
     value: float,
 ) -> None:
+    """
+    Set the repeat count for a Fingerbot device's program.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+        value: The new repeat count value to set.
+
+    Returns:
+        None
+
+    """
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
@@ -140,6 +238,17 @@ def get_fingerbot_program_position(
     self: TuyaBLENumber,
     product: TuyaBLEProductInfo,
 ) -> float | None:
+    """
+    Retrieve the program position value for a Fingerbot device.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+
+    Returns:
+        The program position as a float if available, otherwise None.
+
+    """
     result: float | None = None
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
@@ -154,6 +263,18 @@ def set_fingerbot_program_position(
     product: TuyaBLEProductInfo,
     value: float,
 ) -> None:
+    """
+    Set the program position value for a Fingerbot device.
+
+    Args:
+        self: The TuyaBLENumber instance.
+        product: The TuyaBLEProductInfo for the device.
+        value: The new position value to set.
+
+    Returns:
+        None
+
+    """
     if product.fingerbot and product.fingerbot.program:
         datapoint = self._device.datapoints[product.fingerbot.program]
         if datapoint and type(datapoint.value) is bytes:
@@ -162,8 +283,10 @@ def set_fingerbot_program_position(
             self._hass.create_task(datapoint.set_value(new_value))
 
 
-@dataclass
+@dataclass(frozen=True)
 class TuyaBLEDownPositionDescription(NumberEntityDescription):
+    """Number entity description for the down position setting of a Fingerbot device."""
+
     key: str = "down_position"
     icon: str = "mdi:arrow-down-bold"
     native_max_value: float = 100
@@ -173,8 +296,10 @@ class TuyaBLEDownPositionDescription(NumberEntityDescription):
     entity_category: EntityCategory = EntityCategory.CONFIG
 
 
-@dataclass
+@dataclass(frozen=True)
 class TuyaBLEUpPositionDescription(NumberEntityDescription):
+    """Number entity description for the up position setting of a Fingerbot device."""
+
     key: str = "up_position"
     icon: str = "mdi:arrow-up-bold"
     native_max_value: float = 50
@@ -184,8 +309,10 @@ class TuyaBLEUpPositionDescription(NumberEntityDescription):
     entity_category: EntityCategory = EntityCategory.CONFIG
 
 
-@dataclass
+@dataclass(frozen=True)
 class TuyaBLEHoldTimeDescription(NumberEntityDescription):
+    """Number entity description for the hold time setting of a Fingerbot device."""
+
     key: str = "hold_time"
     icon: str = "mdi:timer"
     native_max_value: float = 10
@@ -197,14 +324,26 @@ class TuyaBLEHoldTimeDescription(NumberEntityDescription):
 
 @dataclass
 class TuyaBLEHoldTimeMapping(TuyaBLENumberMapping):
+    """Mapping for hold time number entities specific to Fingerbot devices."""
+
     description: NumberEntityDescription = field(
-        default_factory=lambda: TuyaBLEHoldTimeDescription()
+        default_factory=TuyaBLEHoldTimeDescription
     )
     is_available: TuyaBLENumberIsAvailable = is_fingerbot_in_push_mode
 
 
 @dataclass
 class TuyaBLECategoryNumberMapping:
+    """
+    Mapping for Tuya BLE number entities by product or category.
+
+    Attributes:
+        products: Optional dictionary mapping product IDs to
+            lists of TuyaBLENumberMapping.
+        mapping: Optional list of TuyaBLENumberMapping for the category.
+
+    """
+
     products: dict[str, list[TuyaBLENumberMapping]] | None = None
     mapping: list[TuyaBLENumberMapping] | None = None
 
@@ -243,9 +382,8 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
     ),
     "szjqr": TuyaBLECategoryNumberMapping(
         products={
-            **dict.fromkeys(
-                ["3yqdo5yt", "xhf790if"],  # CubeTouch 1s and II
-                [
+            **{
+                k: [
                     TuyaBLEHoldTimeMapping(dp_id=3),
                     TuyaBLENumberMapping(
                         dp_id=5,
@@ -259,11 +397,11 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
                             native_min_value=0,
                         ),
                     ),
-                ],
-            ),
-            **dict.fromkeys(
-                ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"],  # Fingerbot Plus
-                [
+                ]
+                for k in ["3yqdo5yt", "xhf790if"]  # CubeTouch 1s and II
+            },
+            **{
+                k: [
                     TuyaBLENumberMapping(
                         dp_id=9,
                         description=TuyaBLEDownPositionDescription(),
@@ -304,19 +442,12 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
                         getter=get_fingerbot_program_position,
                         setter=set_fingerbot_program_position,
                     ),
-                ],
-            ),
-            **dict.fromkeys(
-                [
-                    "ltak7e1p",
-                    "y6kttvd6",
-                    "yrnk7mnn",
-                    "nvr2rocq",
-                    "bnt7wajf",
-                    "rvdceqjh",
-                    "5xhbk964",
-                ],  # Fingerbot
-                [
+                ]
+                for k in ["blliqpsj", "ndvkgsrm", "yiihr7zh", "neq16kgd"]
+                # Fingerbot Plus
+            },
+            **{
+                k: [
                     TuyaBLENumberMapping(
                         dp_id=9,
                         description=TuyaBLEDownPositionDescription(),
@@ -335,15 +466,23 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
                         description=TuyaBLEUpPositionDescription(),
                         is_available=is_fingerbot_not_in_program_mode,
                     ),
-                ],
-            ),
+                ]
+                for k in [
+                    "ltak7e1p",
+                    "y6kttvd6",
+                    "yrnk7mnn",
+                    "nvr2rocq",
+                    "bnt7wajf",
+                    "rvdceqjh",
+                    "5xhbk964",
+                ]  # Fingerbot
+            },
         },
     ),
     "kg": TuyaBLECategoryNumberMapping(
         products={
-            **dict.fromkeys(
-                ["mknd4lci", "riecov42"],  # Fingerbot Plus
-                [
+            **{
+                k: [
                     TuyaBLENumberMapping(
                         dp_id=102,
                         description=TuyaBLEDownPositionDescription(),
@@ -384,18 +523,15 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
                         getter=get_fingerbot_program_position,
                         setter=set_fingerbot_program_position,
                     ),
-                ],
-            ),
+                ]
+                for k in ["mknd4lci", "riecov42"]  # Fingerbot Plus
+            },
         },
     ),
     "wk": TuyaBLECategoryNumberMapping(
         products={
-            **dict.fromkeys(
-                [
-                    "drlajpqc",
-                    "nhj2j7su",
-                ],  # Thermostatic Radiator Valve
-                [
+            **{
+                k: [
                     TuyaBLENumberMapping(
                         dp_id=27,
                         description=NumberEntityDescription(
@@ -408,8 +544,12 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
                             entity_category=EntityCategory.CONFIG,
                         ),
                     ),
-                ],
-            ),
+                ]
+                for k in [
+                    "drlajpqc",
+                    "nhj2j7su",
+                ]  # Thermostatic Radiator Valve
+            },
         },
     ),
     "wsdcg": TuyaBLECategoryNumberMapping(
@@ -534,7 +674,18 @@ mapping: dict[str, TuyaBLECategoryNumberMapping] = {
 }
 
 
-def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLECategoryNumberMapping]:
+def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLENumberMapping]:
+    """
+    Retrieve the list of TuyaBLENumberMapping objects for a given TuyaBLEDevice.
+
+    Args:
+        device: The TuyaBLEDevice instance to look up.
+
+    Returns:
+        A list of TuyaBLENumberMapping objects corresponding to the device's
+        category and product_id, or an empty list if no mapping is found.
+
+    """
     category = mapping.get(device.category)
     if category is not None and category.products is not None:
         product_mapping = category.products.get(device.product_id)
@@ -552,11 +703,22 @@ class TuyaBLENumber(TuyaBLEEntity, NumberEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: DataUpdateCoordinator,
+        coordinator: TuyaBLEPassiveCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         mapping: TuyaBLENumberMapping,
     ) -> None:
+        """
+        Initialize a Tuya BLE Number entity.
+
+        Args:
+            hass: HomeAssistant instance.
+            coordinator: Coordinator for passive updates.
+            device: The Tuya BLE device.
+            product: Product information for the device.
+            mapping: Mapping configuration for this number entity.
+
+        """
         super().__init__(hass, coordinator, device, product, mapping.description)
         self._mapping = mapping
         self._attr_mode = mapping.mode
@@ -564,12 +726,19 @@ class TuyaBLENumber(TuyaBLEEntity, NumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the entity value to represent the entity state."""
-        if self._mapping.getter:
+        if self._mapping.getter is not None:
             return self._mapping.getter(self, self._product)
 
         datapoint = self._device.datapoints[self._mapping.dp_id]
         if datapoint:
-            return datapoint.value / self._mapping.coefficient
+            value = datapoint.value
+            if isinstance(value, (int, float)):
+                return value / self._mapping.coefficient
+            # Optionally handle bool as int
+            if isinstance(value, bool):
+                return int(value) / self._mapping.coefficient
+            # For unsupported types (bytes, str), return None or a default
+            return None
 
         return self._mapping.description.native_min_value
 
@@ -604,18 +773,16 @@ async def async_setup_entry(
     """Set up the Tuya BLE sensors."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     mappings = get_mapping_by_device(data.device)
-    entities: list[TuyaBLENumber] = []
-    for mapping in mappings:
-        if mapping.force_add or data.device.datapoints.has_id(
-            mapping.dp_id, mapping.dp_type
-        ):
-            entities.append(
-                TuyaBLENumber(
-                    hass,
-                    data.coordinator,
-                    data.device,
-                    data.product,
-                    mapping,
-                )
-            )
+    entities: list[TuyaBLENumber] = [
+        TuyaBLENumber(
+            hass,
+            data.coordinator,
+            data.device,
+            data.product,
+            mapping,
+        )
+        for mapping in mappings
+        if mapping.force_add
+        or data.device.datapoints.has_id(mapping.dp_id, mapping.dp_type)
+    ]
     async_add_entities(entities)

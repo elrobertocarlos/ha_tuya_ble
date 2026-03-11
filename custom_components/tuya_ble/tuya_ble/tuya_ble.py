@@ -191,22 +191,22 @@ class TuyaBLEDataPoints:
     def __getitem__(self, key: int) -> TuyaBLEDataPoint | None:
         return self._datapoints.get(key)
 
-    def has_id(self, id: int, type: TuyaBLEDataPointType | None = None) -> bool:
-        return (id in self._datapoints) and (
-            (type is None) or (self._datapoints[id].type == type)
+    def has_id(self, dp_id: int, type: TuyaBLEDataPointType | None = None) -> bool:
+        return (dp_id in self._datapoints) and (
+            (type is None) or (self._datapoints[dp_id].type == type)
         )
 
     def get_or_create(
         self,
-        id: int,
+        dp_id: int,
         type: TuyaBLEDataPointType,
         value: bytes | bool | int | str | None = None,
     ) -> TuyaBLEDataPoint:
-        datapoint = self._datapoints.get(id)
+        datapoint = self._datapoints.get(dp_id)
         if datapoint:
             return datapoint
-        datapoint = TuyaBLEDataPoint(self, id, time.time(), 0, type, value)
-        self._datapoints[id] = datapoint
+        datapoint = TuyaBLEDataPoint(self, dp_id, time.time(), 0, type, value)
+        self._datapoints[dp_id] = datapoint
         return datapoint
 
     def begin_update(self) -> None:
@@ -248,6 +248,72 @@ global_connect_lock = asyncio.Lock()
 
 
 class TuyaBLEDevice:
+    """
+    Main class for Tuya BLE device connection and communication.
+
+    Handles device initialization, pairing, connection management, data point updates,
+    and communication with Tuya BLE devices.
+
+    Attributes
+    ----------
+    _device_manager : AbstaractTuyaBLEDeviceManager
+        Manager for device credentials and BLE operations.
+    _ble_device : BLEDevice
+        The BLE device instance.
+    _advertisement_data : AdvertisementData | None
+        BLE advertisement data.
+    _client : BleakClientWithServiceCache | None
+        BLE client for communication.
+    _datapoints : TuyaBLEDataPoints
+        Collection of data points for the device.
+    _is_paired : bool
+        Indicates if the device is paired.
+    _expected_disconnect : bool
+        Indicates if a disconnect is expected.
+    _operation_lock : asyncio.Lock
+        Lock for BLE operations.
+    _connect_lock : asyncio.Lock
+        Lock for BLE connection.
+    _current_seq_num : int
+        Current sequence number for packets.
+    _seq_num_lock : asyncio.Lock
+        Lock for sequence number updates.
+    _device_version : str
+        Device firmware version.
+    _protocol_version_str : str
+        Protocol version as string.
+    _hardware_version : str
+        Hardware version.
+    _auth_key : bytes | None
+        Authentication key.
+    _local_key : bytes | None
+        Local key.
+    _login_key : bytes | None
+        Login key.
+    _session_key : bytes | None
+        Session key.
+
+    Methods
+    -------
+    initialize()
+        Initialize the Tuya BLE device.
+    pair()
+        Send pairing request to device.
+    update()
+        Request device status update.
+    start()
+        Start the TuyaBLE device.
+    stop()
+        Stop the TuyaBLE device.
+    register_callback(callback)
+        Register a callback for state changes.
+    register_connected_callback(callback)
+        Register a callback for connection events.
+    register_disconnected_callback(callback)
+        Register a callback for disconnection events.
+
+    """
+
     def __init__(
         self,
         device_manager: AbstaractTuyaBLEDeviceManager,
@@ -383,7 +449,11 @@ class TuyaBLEDevice:
     def name(self) -> str:
         """Get the name of the device."""
         if self._device_info:
-            return self._device_info.device_name
+            return (
+                self._device_info.device_name
+                or self._ble_device.name
+                or self._ble_device.address
+            )
         return self._ble_device.name or self._ble_device.address
 
     @property
@@ -432,14 +502,14 @@ class TuyaBLEDevice:
     def product_model(self) -> str:
         """Return the product model."""
         if self._device_info is not None:
-            return self._device_info.product_model
+            return self._device_info.product_model or ""
         return ""
 
     @property
     def product_name(self) -> str:
         """Return the product name."""
         if self._device_info is not None:
-            return self._device_info.product_name
+            return self._device_info.product_name or ""
         return ""
 
     @property
@@ -464,7 +534,7 @@ class TuyaBLEDevice:
 
     def get_or_create_datapoint(
         self,
-        id: int,
+        dp_id: int,
         type: TuyaBLEDataPointType,
         value: bytes | bool | int | str | None = None,
     ) -> TuyaBLEDataPoint:
@@ -473,7 +543,7 @@ class TuyaBLEDevice:
 
         Parameters
         ----------
-        id : int
+        dp_id : int
             The unique identifier of the data point.
         type : TuyaBLEDataPointType
             The data type of the value.
@@ -486,7 +556,7 @@ class TuyaBLEDevice:
             The data point object.
 
         """
-        return self._datapoints.get_or_create(id, type, value)
+        return self._datapoints.get_or_create(dp_id, type, value)
 
     def _fire_connected_callbacks(self) -> None:
         """Fire the callbacks."""

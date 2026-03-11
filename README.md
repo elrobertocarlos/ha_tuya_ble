@@ -120,6 +120,9 @@ All features available in Home Assistant. Programming (series of actions) is imp
 
 ### Smart Curtains (category_id 'cl')
 
+- **Curtain Bot** (product_id: `kcy0x4pi`)
+  Also sold as Smart Curtain Robot
+
 - **Smart Curtain Robot** (product_id: `kcy0x4pi`)
 
 **Features:**
@@ -127,6 +130,8 @@ All features available in Home Assistant. Programming (series of actions) is imp
 - Stop curtain movement
 - Set curtain position (0-100%)
 - Current position feedback
+- Motor status sensor
+- Motor fault sensor
 
 ### Access Control (category_id 'jtmspro')
 

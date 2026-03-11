@@ -12,6 +12,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from habluetooth import BluetoothScanningMode
+from homeassistant.components.bluetooth.passive_update_coordinator import (
+    PassiveBluetoothCoordinatorEntity,
+    PassiveBluetoothDataUpdateCoordinator,
+)
 from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -21,10 +26,6 @@ from homeassistant.helpers.entity import (
     generate_entity_id,
 )
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-)
 
 from .const import (
     DEVICE_DEF_MANUFACTURER,
@@ -34,6 +35,8 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    import datetime
+
     from home_assistant_bluetooth import BluetoothServiceInfoBleak
 
     from .cloud import HASSTuyaBLEDeviceManager
@@ -84,9 +87,33 @@ class TuyaBLEFingerbotInfo:
 
 
 @dataclass
+class TuyaBLELockInfo:
+    """
+    Lock device configuration information.
+
+    Attributes
+    ----------
+    alarm_lock : int
+        The alarm lock data point ID.
+    unlock_ble : int
+        The BLE unlock data point ID.
+    unlock_fingerprint : int
+        The fingerprint unlock data point ID.
+    unlock_password : int
+        The password unlock data point ID.
+
+    """
+
+    alarm_lock: int
+    unlock_ble: int
+    unlock_fingerprint: int
+    unlock_password: int
+
+
+@dataclass
 class TuyaBLEProductInfo:
     """
-    Product information for a Tuya BLE device.
+    Product information for Tuya BLE devices.
 
     Attributes
     ----------
@@ -95,16 +122,19 @@ class TuyaBLEProductInfo:
     manufacturer : str
         The manufacturer name. Defaults to DEVICE_DEF_MANUFACTURER.
     fingerbot : TuyaBLEFingerbotInfo | None
-        Fingerbot-specific configuration, if applicable. Defaults to None.
+        Fingerbot configuration information, if applicable.
+    lock : TuyaBLELockInfo | None
+        Lock configuration information, if applicable.
 
     """
 
     name: str
     manufacturer: str = DEVICE_DEF_MANUFACTURER
     fingerbot: TuyaBLEFingerbotInfo | None = None
+    lock: TuyaBLELockInfo | None = None
 
 
-class TuyaBLEEntity(CoordinatorEntity):
+class TuyaBLEEntity(PassiveBluetoothCoordinatorEntity):
     """
     Tuya BLE base entity.
 
@@ -115,11 +145,28 @@ class TuyaBLEEntity(CoordinatorEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: TuyaBLECoordinator,
+        coordinator: TuyaBLEPassiveCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         description: EntityDescription,
     ) -> None:
+        """
+        Initialize a TuyaBLEEntity.
+
+        Parameters
+        ----------
+        hass : HomeAssistant
+            The Home Assistant instance.
+        coordinator : TuyaBLEPassiveCoordinator
+            The data update coordinator.
+        device : TuyaBLEDevice
+            The Tuya BLE device instance.
+        product : TuyaBLEProductInfo
+            Product information for the device.
+        description : EntityDescription
+            Entity description for Home Assistant.
+
+        """
         super().__init__(coordinator)
         self._hass = hass
         self._coordinator = coordinator
@@ -150,36 +197,49 @@ class TuyaBLEEntity(CoordinatorEntity):
         self.async_write_ha_state()
 
 
-class TuyaBLECoordinator(DataUpdateCoordinator[None]):
+class TuyaBLEPassiveCoordinator(PassiveBluetoothDataUpdateCoordinator):
     """
-    Data coordinator for receiving Tuya BLE updates.
+    Passive coordinator for Tuya BLE devices.
 
-    Manages device connection state, firmware updates, and data updates for Tuya BLE
-    devices.
+    Manages passive Bluetooth updates, device connection state,
+    and event firing for Tuya BLE devices.
     """
 
     def __init__(
-        self, hass: HomeAssistant, device: TuyaBLEDevice, entry_id: str
+        self,
+        hass: HomeAssistant,
+        logger: logging.Logger,
+        address: str,
+        device: TuyaBLEDevice,
     ) -> None:
-        """Initialise the coordinator."""
+        """
+        Initialize the TuyaBLEPassiveCoordinator.
+
+        Parameters
+        ----------
+        hass : HomeAssistant
+            The Home Assistant instance.
+        logger : logging.Logger
+            Logger instance.
+        address : str
+            Bluetooth address of the device.
+        device : TuyaBLEDevice
+            The Tuya BLE device instance.
+
+        """
         super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
+            hass, logger, address, BluetoothScanningMode.ACTIVE, connectable=True
         )
         self._device = device
-        self._entry_id = entry_id
         self._disconnected: bool = True
         self._unsub_disconnect: CALLBACK_TYPE | None = None
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
 
-        # ...existing code...
-
     @property
     def connected(self) -> bool:
-        """Return True when the device is connected."""
+        """Return True if the device is currently connected."""
         return not self._disconnected
 
     @callback
@@ -188,34 +248,12 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             self._unsub_disconnect()
         if self._disconnected:
             self._disconnected = False
-            # Update device registry with current device info
-            # (including firmware version)
-            device_registry = dr.async_get(self.hass)
-            device_info = get_device_info(self._device)
-            if device_info:
-                _LOGGER.debug(
-                    "%s: Updating device registry with sw_version: %s",
-                    self._device.address,
-                    device_info.get("sw_version"),
-                )
-                # Get existing device entry
-                identifiers = device_info.get("identifiers")
-                if identifiers:
-                    device = device_registry.async_get_device(identifiers=identifiers)
-                    if device:
-                        # Update existing device with new firmware version
-                        device_registry.async_update_device(
-                            device.id,
-                            sw_version=device_info.get("sw_version"),
-                            hw_version=device_info.get("hw_version"),
-                        )
             self.async_update_listeners()
 
     @callback
     def _async_handle_update(self, updates: list[TuyaBLEDataPoint]) -> None:
-        """Just trigger the callbacks."""
         self._async_handle_connect()
-        self.async_set_updated_data(None)
+        self.async_update_listeners()
         info = get_device_product_info(self._device)
         if info and info.fingerbot and info.fingerbot.manual_control != 0:
             for update in updates:
@@ -227,17 +265,58 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
                             CONF_DEVICE_ID: self._device.device_id,
                         },
                     )
+        if info and info.lock:
+            for update in updates:
+                if update.changed_by_device:
+                    if update.id == info.lock.alarm_lock:
+                        self.hass.bus.fire(
+                            f"{DOMAIN}_lock_alarm_event",
+                            {
+                                CONF_ADDRESS: self._device.address,
+                                CONF_DEVICE_ID: self._device.device_id,
+                                "event": "alarm_lock",
+                                "value": update.value,
+                            },
+                        )
+                    elif update.id == info.lock.unlock_ble:
+                        self.hass.bus.fire(
+                            f"{DOMAIN}_lock_unlock_ble_event",
+                            {
+                                CONF_ADDRESS: self._device.address,
+                                CONF_DEVICE_ID: self._device.device_id,
+                                "event": "unlock_ble",
+                                "value": update.value,
+                            },
+                        )
+                    elif update.id == info.lock.unlock_fingerprint:
+                        self.hass.bus.fire(
+                            f"{DOMAIN}_lock_unlock_fingerprint_event",
+                            {
+                                CONF_ADDRESS: self._device.address,
+                                CONF_DEVICE_ID: self._device.device_id,
+                                "event": "unlock_fingerprint",
+                                "value": update.value,
+                            },
+                        )
+                    elif update.id == info.lock.unlock_password:
+                        self.hass.bus.fire(
+                            f"{DOMAIN}_lock_unlock_password_event",
+                            {
+                                CONF_ADDRESS: self._device.address,
+                                CONF_DEVICE_ID: self._device.device_id,
+                                "event": "unlock_password",
+                                "value": update.value,
+                            },
+                        )
 
     @callback
-    def _set_disconnected(self, _: None) -> None:
-        """Invoke the idle timeout callback, called when the alarm fires."""
+    def _set_disconnected(self, _: datetime.datetime) -> None:
         self._disconnected = True
         self._unsub_disconnect = None
         self.async_update_listeners()
 
     @callback
     def _async_handle_disconnect(self) -> None:
-        """Trigger the callbacks for disconnected."""
         if self._unsub_disconnect is None:
             delay: float = SET_DISCONNECTED_DELAY
             self._unsub_disconnect = async_call_later(
@@ -260,7 +339,7 @@ class TuyaBLEData:
         Product information for the device.
     manager : HASSTuyaBLEDeviceManager
         The device manager instance.
-    coordinator : TuyaBLECoordinator
+    coordinator : TuyaBLEPassiveCoordinator
         The data coordinator for the device.
 
     """
@@ -269,7 +348,7 @@ class TuyaBLEData:
     device: TuyaBLEDevice
     product: TuyaBLEProductInfo
     manager: HASSTuyaBLEDeviceManager
-    coordinator: TuyaBLECoordinator
+    coordinator: TuyaBLEPassiveCoordinator
 
 
 @dataclass
