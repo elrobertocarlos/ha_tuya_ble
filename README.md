@@ -120,10 +120,7 @@ All features available in Home Assistant. Programming (series of actions) is imp
 
 ### Smart Curtains (category_id 'cl')
 
-- **Curtain Bot** (product_id: `kcy0x4pi`)
-  Also sold as Smart Curtain Robot
-
-- **Smart Curtain Robot** (product_id: `kcy0x4pi`)
+- **Curtain Bot / Smart Curtain Robot** (product_id: `kcy0x4pi`)
 
 **Features:**
 - Open/Close curtain
