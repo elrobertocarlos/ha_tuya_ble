@@ -101,14 +101,6 @@ mapping: dict[str, TuyaBLECategoryBinarySensorMapping] = {
         products={
             "kcy0x4pi": [  # Smart Curtain Robot
                 TuyaBLEBinarySensorMapping(
-                    dp_id=4,  # motor status
-                    description=BinarySensorEntityDescription(
-                        key="motor_status",
-                        device_class=BinarySensorDeviceClass.MOVING,
-                        entity_category=None,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
                     dp_id=12,  # fault bitmap
                     description=BinarySensorEntityDescription(
                         key="motor_fault",
@@ -120,9 +112,9 @@ mapping: dict[str, TuyaBLECategoryBinarySensorMapping] = {
                         self,
                         "_attr_is_on",
                         bool(
-                            self._device.datapoints[12] is not None
-                            and isinstance(self._device.datapoints[12].value, int)
-                            and (self._device.datapoints[12].value & 0x1)
+                            (datapoint := self._device.datapoints[12]) is not None
+                            and isinstance(datapoint.value, int)
+                            and (datapoint.value & 0x1)
                         ),
                     ),
                 ),

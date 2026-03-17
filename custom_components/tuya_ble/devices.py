@@ -233,6 +233,7 @@ class TuyaBLEPassiveCoordinator(PassiveBluetoothDataUpdateCoordinator):
         self._device = device
         self._disconnected: bool = True
         self._unsub_disconnect: CALLBACK_TYPE | None = None
+        self._unsub_refresh_requests: list[CALLBACK_TYPE] = []
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
@@ -243,17 +244,68 @@ class TuyaBLEPassiveCoordinator(PassiveBluetoothDataUpdateCoordinator):
         return not self._disconnected
 
     @callback
+    def _async_update_device_registry_versions(self) -> None:
+        """Update device registry with latest firmware/protocol/hardware versions."""
+        if not (
+            self._device.device_version
+            or self._device.protocol_version
+            or self._device.hardware_version
+        ):
+            return
+
+        device_registry = dr.async_get(self.hass)
+        device_entry = device_registry.async_get_device(
+            identifiers={(DOMAIN, self._device.address)}
+        )
+        if device_entry is None:
+            return
+
+        device_registry.async_update_device(
+            device_entry.id,
+            hw_version=self._device.hardware_version or None,
+            sw_version=(
+                f"{self._device.device_version} "
+                f"(protocol {self._device.protocol_version})"
+                if self._device.device_version or self._device.protocol_version
+                else None
+            ),
+        )
+
+    @callback
     def _async_handle_connect(self) -> None:
         if self._unsub_disconnect is not None:
             self._unsub_disconnect()
         if self._disconnected:
             self._disconnected = False
+            self._schedule_refresh_requests()
             self.async_update_listeners()
+        self._async_update_device_registry_versions()
+
+    @callback
+    def _cancel_refresh_requests(self) -> None:
+        while self._unsub_refresh_requests:
+            self._unsub_refresh_requests.pop()()
+
+    @callback
+    def _request_datapoints_refresh(self, _: datetime.datetime | None = None) -> None:
+        self.hass.async_create_task(self._device.update_all_datapoints())
+
+    @callback
+    def _schedule_refresh_requests(self) -> None:
+        # Some devices send partial DP snapshots immediately after connect.
+        # Trigger a few staged refreshes to pick up late-arriving values.
+        self._cancel_refresh_requests()
+        self._request_datapoints_refresh()
+        for delay in (1.0, 3.0):
+            self._unsub_refresh_requests.append(
+                async_call_later(self.hass, delay, self._request_datapoints_refresh)
+            )
 
     @callback
     def _async_handle_update(self, updates: list[TuyaBLEDataPoint]) -> None:
         self._async_handle_connect()
         self.async_update_listeners()
+        self._async_update_device_registry_versions()
         info = get_device_product_info(self._device)
         if info and info.fingerbot and info.fingerbot.manual_control != 0:
             for update in updates:
@@ -313,6 +365,7 @@ class TuyaBLEPassiveCoordinator(PassiveBluetoothDataUpdateCoordinator):
     def _set_disconnected(self, _: datetime.datetime) -> None:
         self._disconnected = True
         self._unsub_disconnect = None
+        self._cancel_refresh_requests()
         self.async_update_listeners()
 
     @callback

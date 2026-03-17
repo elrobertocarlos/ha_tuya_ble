@@ -229,28 +229,6 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                         icon="mdi:brightness-percent",
                     ),
                 ),
-                TuyaBLESensorMapping(
-                    dp_id=7,  # work_state
-                    description=SensorEntityDescription(
-                        key="work_state",
-                        device_class=SensorDeviceClass.ENUM,
-                        icon="mdi:robot",
-                        entity_category=None,
-                        state_class=None,
-                        options=["standby", "learning", "success", "fail"],
-                    ),
-                ),
-                TuyaBLESensorMapping(
-                    dp_id=101,  # end_default
-                    description=SensorEntityDescription(
-                        key="end_default",
-                        device_class=SensorDeviceClass.ENUM,
-                        icon="mdi:arrow-left-right",
-                        entity_category=None,
-                        state_class=None,
-                        options=["left", "right"],
-                    ),
-                ),
             ],
         },
     ),

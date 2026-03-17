@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog],
 and this project adheres to [Semantic Versioning].
 
-## [Unreleased]
+## [0.2.6] - 2026-03-17
+
+### Added
+
+- Added motor fault diagnostic binary sensor for Smart Curtain Robot (DP 12).
+- Added device registry metadata refresh to populate firmware/protocol/hardware versions after connect.
+
+### Changed
+
+- Improved Tuya BLE packet reassembly tolerance for devices that include fixed packet header padding bytes.
+- Improved datapoint synchronization reliability by scheduling staged refresh requests after connect.
+- Removed Smart Curtain Robot moving/work state/end-position sensors to reduce noisy/less-useful entities for cover devices.
+
+### Fixed
+
+- Fixed FUN_SENDER_DEVICE_STATUS handling to use fire-and-forget request flow.
+- Fixed pairing response parsing to accept variable-length payloads returned by some devices.
 
 ## [0.2.5] - 2026-02-23
 

@@ -16,7 +16,7 @@
     "tuya-iot-py-sdk>=0.6.6",
     "pycountry>23.0.0"
   ],
-  "version": "0.2.5",
+  "version": "0.2.6",
   "bluetooth": [
     {
       "connectable": true,
