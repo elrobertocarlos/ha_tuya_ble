@@ -12,6 +12,8 @@ from homeassistant.components.cover import (
     CoverEntity,
     CoverEntityDescription,
 )
+from homeassistant.core import callback
+from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
 from .devices import (
@@ -28,6 +30,9 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 TuyaBLECoverIsAvailable = Callable[["TuyaBLECover", TuyaBLEProductInfo], bool] | None
+
+_MOTION_SETTLE_DELAY = 1.5
+_CONTROL_ECHO_TIMEOUT = 4.0
 
 
 @dataclass
@@ -51,6 +56,10 @@ class TuyaBLECoverMapping:
         The datapoint ID for setting cover position.
     control_dp_id : int | None
         The datapoint ID for control commands (open/close/stop).
+    control_echo_dp_id : int | None
+        Datapoint ID expected to echo after a control command.
+    control_echo_timeout : float | None
+        Time to wait before reconnecting if the echo is missing.
 
     """
 
@@ -62,6 +71,8 @@ class TuyaBLECoverMapping:
     # Data point IDs for position and control
     position_dp_id: int | None = None
     control_dp_id: int | None = None
+    control_echo_dp_id: int | None = None
+    control_echo_timeout: float | None = None
 
 
 @dataclass
@@ -94,6 +105,21 @@ mapping: dict[str, TuyaBLECategoryCoverMapping] = {
                     ),
                     position_dp_id=2,  # percent_control - for setting position
                     control_dp_id=1,  # control - for open/close/stop commands
+                    control_echo_dp_id=1,
+                    control_echo_timeout=_CONTROL_ECHO_TIMEOUT,
+                ),
+            ],
+            "ousymtkt": [  # Roller Blind Robot
+                TuyaBLECoverMapping(
+                    dp_id=8,  # percent_state - current position
+                    description=CoverEntityDescription(
+                        key="curtain",
+                        device_class=CoverDeviceClass.BLIND,
+                    ),
+                    position_dp_id=9,  # percent_control - for setting position
+                    control_dp_id=1,  # control - for open/close/stop commands
+                    control_echo_dp_id=1,
+                    control_echo_timeout=_CONTROL_ECHO_TIMEOUT,
                 ),
             ],
         },
@@ -141,21 +167,97 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         """Initialize a Tuya BLE cover entity."""
         super().__init__(hass, coordinator, device, product, mapping.description)
         self._mapping = mapping
+        self._last_raw_position = self._get_raw_position()
+        self._movement_direction = 0
+        self._clear_motion_unsub = None
+        self._clear_control_echo_unsub = None
 
-    @property
-    def current_cover_position(self) -> int | None:
-        """Return current position of cover."""
+    async def async_added_to_hass(self) -> None:
+        """Register device update listeners after entity is added."""
+        await super().async_added_to_hass()
+        self.async_on_remove(self._cancel_control_echo_watchdog)
+        self.async_on_remove(self._device.register_callback(self._handle_device_updates))
+
+    def _get_raw_position(self) -> int | None:
+        """Return raw device position without Home Assistant inversion."""
         datapoint = self._device.datapoints.get_or_create(
             self._mapping.dp_id,
             self._mapping.dp_type or TuyaBLEDataPointType.DT_VALUE,
             0,
         )
-        if datapoint:
+        if datapoint and datapoint.value is not None:
+            return int(datapoint.value)
+        return None
+
+    @callback
+    def _clear_motion_state(self, _now: Any) -> None:
+        """Clear transient motion state after updates stop arriving."""
+        self._clear_motion_unsub = None
+        if self._movement_direction != 0:
+            self._movement_direction = 0
+            self.async_write_ha_state()
+
+    @callback
+    def _set_motion_state(self, direction: int) -> None:
+        """Update motion direction and restart settle timer."""
+        self._movement_direction = direction
+        if self._clear_motion_unsub is not None:
+            self._clear_motion_unsub()
+        if direction != 0:
+            self._clear_motion_unsub = async_call_later(
+                self._hass,
+                _MOTION_SETTLE_DELAY,
+                self._clear_motion_state,
+            )
+        else:
+            self._clear_motion_unsub = None
+
+    @callback
+    def _cancel_control_echo_watchdog(self) -> None:
+        """Cancel waiting for a control echo update."""
+        if self._clear_control_echo_unsub is not None:
+            self._clear_control_echo_unsub()
+            self._clear_control_echo_unsub = None
+
+    @callback
+    def _handle_control_echo_timeout(self, _now: Any) -> None:
+        """Reconnect if the device does not echo the control datapoint."""
+        self._clear_control_echo_unsub = None
+        self._device.request_reconnect()
+
+    @callback
+    def _arm_control_echo_watchdog(self) -> None:
+        """Start waiting for the control datapoint echo from the device."""
+        if (
+            self._mapping.control_echo_dp_id is None
+            or self._mapping.control_echo_timeout is None
+        ):
+            return
+        self._cancel_control_echo_watchdog()
+        self._clear_control_echo_unsub = async_call_later(
+            self._hass,
+            self._mapping.control_echo_timeout,
+            self._handle_control_echo_timeout,
+        )
+
+    @callback
+    def _handle_device_updates(self, updates: list[Any]) -> None:
+        """Cancel pending control echo watchdog when the device responds."""
+        if self._mapping.control_echo_dp_id is None:
+            return
+        for update in updates:
+            if update.id == self._mapping.control_echo_dp_id:
+                self._cancel_control_echo_watchdog()
+                break
+
+    @property
+    def current_cover_position(self) -> int | None:
+        """Return current position of cover."""
+        raw_position = self._get_raw_position()
+        if raw_position is not None:
             # Device uses inverted position: 0=open, 100=closed
             # Home Assistant standard: 0=closed, 100=open
-            # So we invert the value
-            raw_position = int(datapoint.value) if datapoint.value is not None else None
-            return (100 - raw_position) if raw_position is not None else None
+            return 100 - raw_position
         return None
 
     @property
@@ -169,20 +271,18 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     @property
     def is_opening(self) -> bool:
         """Return if cover is opening."""
-        # We don't have direct feedback on whether it's opening,
-        # so return False for now
-        return False
+        return self._movement_direction > 0
 
     @property
     def is_closing(self) -> bool:
         """Return if cover is closing."""
-        # We don't have direct feedback on whether it's closing,
-        # so return False for now
-        return False
+        return self._movement_direction < 0
 
     def open_cover(self, **_kwargs: Any) -> None:
         """Open the cover."""
         if self._mapping.control_dp_id:
+            self._hass.add_job(self._set_motion_state, 1)
+            self._hass.add_job(self._arm_control_echo_watchdog)
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.control_dp_id,
                 TuyaBLEDataPointType.DT_ENUM,
@@ -194,6 +294,8 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     def close_cover(self, **_kwargs: Any) -> None:
         """Close the cover."""
         if self._mapping.control_dp_id:
+            self._hass.add_job(self._set_motion_state, -1)
+            self._hass.add_job(self._arm_control_echo_watchdog)
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.control_dp_id,
                 TuyaBLEDataPointType.DT_ENUM,
@@ -205,6 +307,8 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     def stop_cover(self, **_kwargs: Any) -> None:
         """Stop the cover."""
         if self._mapping.control_dp_id:
+            self._hass.add_job(self._set_motion_state, 0)
+            self._hass.add_job(self._arm_control_echo_watchdog)
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.control_dp_id,
                 TuyaBLEDataPointType.DT_ENUM,
@@ -219,6 +323,15 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
             position = kwargs[ATTR_POSITION]
             # Device uses inverted position, so invert the value
             inverted_position = 100 - int(position)
+            current_raw_position = self._get_raw_position()
+            if (
+                current_raw_position is not None
+                and inverted_position != current_raw_position
+            ):
+                self._hass.add_job(
+                    self._set_motion_state,
+                    1 if inverted_position < current_raw_position else -1,
+                )
             datapoint = self._device.datapoints.get_or_create(
                 self._mapping.position_dp_id,
                 TuyaBLEDataPointType.DT_VALUE,
@@ -226,6 +339,19 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
             )
             if datapoint:
                 self._hass.create_task(datapoint.set_value(inverted_position))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Track motion direction from incoming position updates."""
+        raw_position = self._get_raw_position()
+        if (
+            raw_position is not None
+            and self._last_raw_position is not None
+            and raw_position != self._last_raw_position
+        ):
+            self._set_motion_state(1 if raw_position < self._last_raw_position else -1)
+        self._last_raw_position = raw_position
+        super()._handle_coordinator_update()
 
     @property
     def available(self) -> bool:

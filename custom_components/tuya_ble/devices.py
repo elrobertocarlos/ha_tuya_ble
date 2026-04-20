@@ -428,6 +428,9 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             "kcy0x4pi": TuyaBLEProductInfo(  # Smart curtain robot 4
                 name="Smart Curtain Robot",
             ),
+            "ousymtkt": TuyaBLEProductInfo(  # Roller Blind Robot
+                name="Roller Blind Robot",
+            ),
         },
     ),
     "co2bj": TuyaBLECategoryInfo(

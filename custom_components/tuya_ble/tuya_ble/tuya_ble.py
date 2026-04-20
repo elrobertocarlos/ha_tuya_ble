@@ -393,6 +393,9 @@ class TuyaBLEDevice:
         """Set the ble device."""
         self._ble_device = ble_device
         self._advertisement_data = advertisement_data
+        # Keep protocol/binding metadata in sync with the latest advertisements.
+        # Some devices require protocol v3 during the initial device-info handshake.
+        self._decode_advertisement_data()
 
     async def initialize(self) -> None:
         """
@@ -672,10 +675,34 @@ class TuyaBLEDevice:
         _LOGGER.debug("%s: Stop", self.address)
         await self._execute_disconnect()
 
+    def request_reconnect(self) -> None:
+        """Request reconnect of the active BLE session."""
+        asyncio.create_task(self._request_reconnect())
+
+    async def _request_reconnect(self) -> None:
+        """Reconnect by dropping the current session or ensuring a new one."""
+        client = self._client
+        if client and client.is_connected:
+            _LOGGER.debug(
+                "%s: Requested reconnect; disconnecting current session", self.address
+            )
+            try:
+                await client.disconnect()
+            except BLEAK_EXCEPTIONS:
+                _LOGGER.debug(
+                    "%s: Requested reconnect could not disconnect cleanly",
+                    self.address,
+                    exc_info=True,
+                )
+                asyncio.create_task(self._reconnect())
+        else:
+            asyncio.create_task(self._reconnect())
+
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
         was_paired = self._is_paired
         self._is_paired = False
+        self._fail_pending_responses()
         self._fire_disconnected_callbacks()
         if self._expected_disconnect:
             _LOGGER.debug(
@@ -697,6 +724,13 @@ class TuyaBLEDevice:
                 self.rssi,
             )
             asyncio.create_task(self._reconnect())
+
+    def _fail_pending_responses(self) -> None:
+        """Fail and clear pending request futures after connection loss."""
+        for future in self._input_expected_responses.values():
+            if future and not future.done():
+                future.set_exception(BleakError("Disconnected while waiting for response"))
+        self._input_expected_responses.clear()
 
     def _disconnect(self) -> None:
         """Disconnect from device."""
@@ -799,8 +833,14 @@ class TuyaBLEDevice:
                 else:
                     continue
 
+                paired_via_fallback = False
+
                 if self._client and self._client.is_connected:
-                    _LOGGER.debug("%s: Sending device info request", self.address)
+                    _LOGGER.debug(
+                        "%s: Sending device info request (protocol v%s)",
+                        self.address,
+                        self._protocol_version,
+                    )
                     try:
                         if not await self._send_packet_while_connected(
                             TuyaBLECode.FUN_SENDER_DEVICE_INFO,
@@ -808,12 +848,41 @@ class TuyaBLEDevice:
                             0,
                             True,
                         ):
-                            self._client = None
-                            _LOGGER.error(
-                                "%s: Sending device info request failed",
+                            if not (self._client and self._client.is_connected):
+                                self._client = None
+                                _LOGGER.debug(
+                                    "%s: Device disconnected before compatibility"
+                                    " pairing fallback",
+                                    self.address,
+                                )
+                                continue
+                            _LOGGER.warning(
+                                "%s: Device info request failed; attempting"
+                                " compatibility pairing fallback",
                                 self.address,
                             )
-                            continue
+                            try:
+                                if not await self._send_packet_while_connected(
+                                    TuyaBLECode.FUN_SENDER_PAIR,
+                                    self._build_pairing_request(),
+                                    0,
+                                    True,
+                                ):
+                                    self._client = None
+                                    _LOGGER.error(
+                                        "%s: Compatibility pairing fallback failed",
+                                        self.address,
+                                    )
+                                    continue
+                                paired_via_fallback = True
+                            except Exception:
+                                self._client = None
+                                _LOGGER.error(
+                                    "%s: Compatibility pairing fallback failed",
+                                    self.address,
+                                    exc_info=True,
+                                )
+                                continue
                     except Exception:  # [BLEAK_EXCEPTIONS, BleakNotFoundError]:
                         self._client = None
                         _LOGGER.error(
@@ -825,7 +894,11 @@ class TuyaBLEDevice:
                 else:
                     continue
 
-                if self._client and self._client.is_connected:
+                if (
+                    self._client
+                    and self._client.is_connected
+                    and not paired_via_fallback
+                ):
                     _LOGGER.debug("%s: Sending pairing request", self.address)
                     try:
                         if not await self._send_packet_while_connected(
@@ -947,11 +1020,20 @@ class TuyaBLEDevice:
             key = self._login_key
             security_flag = b"\x04"
         else:
-            if self._session_key is None:
-                msg = "Session key is not initialized"
-                raise RuntimeError(msg)
-            key = self._session_key
-            security_flag = b"\x05"
+            # Some devices never answer FUN_SENDER_DEVICE_INFO but still accept
+            # pairing requests encrypted with login key (flag 0x04).
+            if code == TuyaBLECode.FUN_SENDER_PAIR and self._session_key is None:
+                if self._login_key is None:
+                    msg = "Login key is not initialized"
+                    raise RuntimeError(msg)
+                key = self._login_key
+                security_flag = b"\x04"
+            else:
+                if self._session_key is None:
+                    msg = "Session key is not initialized"
+                    raise RuntimeError(msg)
+                key = self._session_key
+                security_flag = b"\x05"
 
         raw = bytearray()
         raw += pack(">IIHH", seq_num, response_to, code.value, len(data))
@@ -1046,6 +1128,13 @@ class TuyaBLEDevice:
             except TimeoutError:
                 _LOGGER.error(
                     "%s: timeout receiving response, RSSI: %s",
+                    self.address,
+                    self.rssi,
+                )
+                result = False
+            except BleakError:
+                _LOGGER.debug(
+                    "%s: connection lost while waiting for response, RSSI: %s",
                     self.address,
                     self.rssi,
                 )
@@ -1484,26 +1573,19 @@ class TuyaBLEDevice:
                 pos += 1
 
             # Some devices also keep those 3 fixed-header padding bytes on
-            # continuation packets. Strip them only when they would overflow
-            # the current frame and removal restores sane frame length.
-            if (
-                packet_num > 0
-                and data[pos : pos + 3] == b"\x00\x00\x00"
-                and self._input_buffer is not None
-                and self._input_expected_length > 0
-            ):
-                current_len = len(self._input_buffer) + (len(data) - pos)
-                adjusted_len = len(self._input_buffer) + (len(data) - pos - 3)
-                if (
-                    current_len > self._input_expected_length
-                    and adjusted_len <= self._input_expected_length
-                ):
-                    _LOGGER.debug(
-                        "%s: Stripping fixed packet header padding from packet %s",
-                        self.address,
-                        packet_num,
-                    )
-                    pos += 3
+            # continuation packets. Strip them when present.
+            #
+            # Rationale: for devices using fixed 32-bit packet numbering,
+            # every continuation packet starts with 3 zero bytes after varint
+            # parsing the packet number. Keeping those bytes causes frame
+            # length drift and can block response parsing.
+            if packet_num > 0 and data[pos : pos + 3] == b"\x00\x00\x00":
+                _LOGGER.debug(
+                    "%s: Stripping fixed packet header padding from packet %s",
+                    self.address,
+                    packet_num,
+                )
+                pos += 3
 
             if self._input_buffer is None:
                 _LOGGER.error(
@@ -1544,7 +1626,17 @@ class TuyaBLEDevice:
             self._clean_input()
             return
         if len(self._input_buffer) == self._input_expected_length:
-            self._parse_input()
+            try:
+                self._parse_input()
+            except Exception:
+                _LOGGER.error(
+                    "%s: Failed to parse notification frame (len=%s, expected=%s)",
+                    self.address,
+                    len(self._input_buffer),
+                    self._input_expected_length,
+                    exc_info=True,
+                )
+                self._clean_input()
 
     async def _send_datapoints_v3(self, datapoint_ids: list[int]) -> None:
         """Send new values of datapoints to the device."""

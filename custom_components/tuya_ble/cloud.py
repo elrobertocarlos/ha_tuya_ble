@@ -361,6 +361,7 @@ class HASSTuyaBLEDeviceManager(AbstaractTuyaBLEDeviceManager):
             save_data,
         )
         credentials: dict[str, Any] | None = None
+        item: TuyaCloudCacheItem | None = None
 
         cache_key = None
         if self._has_credentials(self._data) and not force_update:
@@ -386,7 +387,6 @@ class HASSTuyaBLEDeviceManager(AbstaractTuyaBLEDeviceManager):
                     None,
                 )
             _LOGGER.debug("Cache key determined: %s", cache_key)
-            item: TuyaCloudCacheItem | None = None
             item = _cache.get(cache_key) if cache_key else None
             _LOGGER.debug(
                 "Cache item retrieved for key %s: %s",

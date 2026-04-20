@@ -39,6 +39,9 @@ from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 if TYPE_CHECKING:
+    from datetime import date, datetime
+    from decimal import Decimal
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -163,7 +166,7 @@ def battery_enum_getter(self: TuyaBLESensor) -> None:
     """
     datapoint = self._device.datapoints[104]
     if datapoint:
-        self._attr_native_value = int(datapoint.value) * 20.0
+        self.set_native_value(int(datapoint.value) * 20.0)
 
 
 @dataclass
@@ -211,6 +214,19 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
         products={
             "kcy0x4pi": [  # Smart Curtain Robot 4
                 TuyaBLEBatteryMapping(dp_id=13),  # battery_percentage
+                TuyaBLESensorMapping(
+                    dp_id=7,  # work_state
+                    description=SensorEntityDescription(
+                        key="work_state",
+                        device_class=SensorDeviceClass.ENUM,
+                        options=[
+                            "standby",
+                            "learning",
+                            "success",
+                            "fail",
+                        ],
+                    ),
+                ),
                 TuyaBLETemperatureMapping(
                     dp_id=103,  # temp_current
                     description=SensorEntityDescription(
@@ -218,6 +234,7 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                         device_class=SensorDeviceClass.TEMPERATURE,
                         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
                         state_class=SensorStateClass.MEASUREMENT,
+                        entity_registry_enabled_default=False,
                     ),
                 ),
                 TuyaBLESensorMapping(
@@ -227,6 +244,22 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                         native_unit_of_measurement="%",
                         state_class=SensorStateClass.MEASUREMENT,
                         icon="mdi:brightness-percent",
+                        entity_registry_enabled_default=False,
+                    ),
+                ),
+            ],
+            "ousymtkt": [  # Roller Blind Robot
+                TuyaBLEBatteryMapping(dp_id=13),  # battery_percentage
+                TuyaBLESensorMapping(
+                    dp_id=3,  # work_state
+                    description=SensorEntityDescription(
+                        key="work_state",
+                        device_class=SensorDeviceClass.ENUM,
+                        options=[
+                            "standby",
+                            "opening",
+                            "closing",
+                        ],
                     ),
                 ),
             ],
@@ -575,7 +608,7 @@ def rssi_getter(sensor: TuyaBLESensor) -> None:
         Sets the native value attribute for signal strength.
 
     """
-    sensor._attr_native_value = sensor.device.rssi
+    sensor.set_native_value(sensor.device.rssi)
 
 
 rssi_mapping = TuyaBLESensorMapping(
@@ -648,6 +681,18 @@ class TuyaBLESensor(TuyaBLEEntity, SensorEntity):
         """
         super().__init__(hass, coordinator, device, product, mapping.description)
         self._mapping = mapping
+
+    @property
+    def device(self) -> TuyaBLEDevice:
+        """Return the underlying Tuya BLE device."""
+        return self._device
+
+    def set_native_value(
+        self,
+        value: str | float | None | date | datetime | Decimal,
+    ) -> None:
+        """Set the native value for the sensor entity."""
+        self._attr_native_value = value
 
     @callback
     def _handle_coordinator_update(self) -> None:

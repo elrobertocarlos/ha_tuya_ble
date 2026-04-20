@@ -13,3 +13,8 @@ logger:
     custom_components.tuya_ble.config_flow: debug
     custom_components.tuya_ble.cloud: debug
     custom_components.tuya_ble.cover: debug
+    custom_components.tuya_ble.tuya_ble: debug
+    custom_components.tuya_ble.tuya_ble.manager: debug
+    custom_components.tuya_ble.tuya_ble.tuya_ble: debug
+    bleak: debug
+    habluetooth: debug
